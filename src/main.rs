@@ -1,6 +1,7 @@
-use std::path::Path;
-
+use std::{collections::VecDeque, path::Path};
 use raylib::prelude::*;
+
+type VertexID = u16;
 
 #[derive(Debug, Clone)]
 pub struct Vertex {
@@ -26,7 +27,7 @@ impl Vertex {
 #[derive(Debug, Clone)]
 pub struct Edge {
     pub id: Option<String>,
-    pub adj: [u16; 2],
+    pub adj: [VertexID; 2],
     pub weight: f32,
 }
 
@@ -41,15 +42,15 @@ impl std::fmt::Display for Edge {
 }
 
 pub trait VertexIndex {
-    fn vertex_index(&self, graph: &WeightedGraph) -> Option<u16>;
+    fn vertex_index(&self, graph: &WeightedGraph) -> Option<VertexID>;
 }
-impl VertexIndex for u16 {
-    fn vertex_index(&self, _graph: &WeightedGraph) -> Option<u16> {
+impl VertexIndex for VertexID {
+    fn vertex_index(&self, _graph: &WeightedGraph) -> Option<VertexID> {
         Some(*self)
     }
 }
 impl VertexIndex for str {
-    fn vertex_index(&self, graph: &WeightedGraph) -> Option<u16> {
+    fn vertex_index(&self, graph: &WeightedGraph) -> Option<VertexID> {
         graph.verts.iter().position(|v| &v.id == self)?.try_into().ok()
     }
 }
@@ -61,7 +62,7 @@ pub struct WeightedGraph {
 }
 
 impl WeightedGraph {
-    pub fn load(path: &Path) -> Option<Self> {
+    pub fn load(_path: &Path) -> Option<Self> {
         todo!()
     }
 
@@ -105,48 +106,62 @@ impl WeightedGraph {
         Some(Self { verts, edges })
     }
 
-    pub fn gen_route(&self, targets: &[usize]) -> Vec<usize> {
-        todo!()
+    pub fn gen_route(&self, start: VertexID, targets: impl IntoIterator<Item = VertexID>) -> Vec<VertexID> {
+        let mut targets = Vec::from_iter(targets);
+        let mut result = Vec::with_capacity(targets.len() + 1);
+        let mut root = start;
+        let mut distance_to_root: Box<[Option<(f32, Option<VertexID>)>]> = vec![const { None }; self.verts.len()].into_boxed_slice();
+        let mut queue: VecDeque<VertexID> = VecDeque::new();
+        while !targets.is_empty() {
+            result.push(root);
+            queue.clear();
+            queue.push_back(root);
+            distance_to_root.fill(const { None });
+            distance_to_root[root as usize] = Some((0.0, None));
+            while let Some(vertex) = queue.pop_front() {
+                for edge in &self.edges {
+                    let [a, b] = edge.adj;
+                    let (src, dst) =
+                        if a == vertex {
+                            (a, b)
+                        } else if b == vertex {
+                            (b, a)
+                        } else {
+                            continue;
+                        };
+                    if distance_to_root[dst as usize].is_some() {
+                        queue.push_back(dst);
+                        println!("pushed vertex {dst} to queue");
+                    }
+                    let distance = distance_to_root[src as usize].expect("src must have been visited if it is queued").0 + edge.weight;
+                    println!("vertex {root}'s distance to vertex {dst} (through vertex {src}) is {distance}");
+                    if distance_to_root[dst as usize].is_none_or(|(d, _)| distance < d) {
+                        distance_to_root[dst as usize] = Some((distance, Some(src)));
+                    }
+                    println!("vertex {}'s");
+                }
+            }
+            let nearest_target = targets.iter().enumerate()
+                .map(|(n, &v)| (n, distance_to_root[v as usize]))
+                .min_by(|(_, d1), (_, d2)| d1.partial_cmp(d2).expect("no distance should be nan"))
+                .map(|(n, _)| n).expect("targets must have at least one element");
+            root = targets.swap_remove(nearest_target);
+        }
+        result
     }
 
-    pub fn add_edge(&mut self, id: Option<impl ToString>, a_id: impl ToString, b_id: impl ToString, weight: impl AsF32) -> Option<()> {
-        let a_id = a_id.to_string();
-        let b_id = b_id.to_string();
+    pub fn add_edge(&mut self, id: Option<impl ToString>, a_id: impl VertexIndex, b_id: impl VertexIndex, weight: impl AsF32) -> Option<()> {
         self.edges.push(Edge {
             id: id.map(|x| x.to_string()),
             adj: [
-                self.verts.iter().position(|v| v.id == a_id)?.try_into().ok()?,
-                self.verts.iter().position(|v| v.id == b_id)?.try_into().ok()?,
+                a_id.vertex_index(self)?,
+                b_id.vertex_index(self)?,
             ],
             weight: weight.as_f32(),
         });
         Some(())
     }
 }
-
-// macro_rules! make_graph_mem {
-//     (
-//         $g_id:ident = {
-//             verts: { $($v_id:ident = $x:literal, $y:literal;)* }
-//             edges: { $($e_id:ident = $a:ident--$b:ident : $weight:literal;)* }
-//         }
-//     ) => {{
-//         #[cfg(debug_assertions)]
-//         #[allow(unused)]
-//         #[allow(nonstandard_style)]
-//         {
-//             let $g_id: ();
-//             fn $g_id() {
-//                 $(let $v_id = Vector2::new($x, $y);)*
-//                 $(let $e_id = (&$a, &$b, Vector2::new($weight, 0.0));)*
-//             }
-//         }
-//         WeightedGraph::load_from_memory(
-//             concat!($(stringify!($v_id), "=", stringify!($x), ",", stringify!($y), ";"),*),
-//             concat!($(stringify!($e_id), "=", stringify!($a), "--", stringify!($b), ":", stringify!($weight), ";"),*),
-//         ).unwrap()
-//     }};
-// }
 
 macro_rules! make_graph {
     (
@@ -170,7 +185,7 @@ macro_rules! make_graph {
             edges: vec![$(
                 Edge {
                     id: make_graph!(@then: $($e_id)?),
-                    adj: [$a as u16, $b as u16],
+                    adj: [$a as VertexID, $b as VertexID],
                     weight: make_graph!(@then: $($weight as f32)?).unwrap_or_else(|| dist($a, $b)),
                 },
             )*],
@@ -305,6 +320,9 @@ fn main() {
             brO1 -- brO2;
         }
     );
+
+    let route = graph.gen_route(0, [5]);
+    println!("{route:?}");
 
     let camera = Camera2D {
         offset: rvec2(window_width/2, window_height/2),
