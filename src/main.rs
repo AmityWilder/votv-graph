@@ -182,8 +182,10 @@ macro_rules! make_graph {
 }
 
 fn main() {
+    let window_width = 1000;
+    let window_height = 1000;
     let (mut rl, thread) = init()
-        .size(640, 640)
+        .size(window_width, window_height)
         .title("Traversal")
         .build();
 
@@ -304,18 +306,16 @@ fn main() {
         }
     );
 
-    println!("{graph:#?}");
-
     let camera = Camera2D {
-        offset: Vector2::new(320.0, 320.0),
+        offset: rvec2(window_width/2, window_height/2),
         target: Vector2::zero(),
         rotation: 0.0,
-        zoom: 0.5,
+        zoom: 0.85,
     };
 
     while !rl.window_should_close() {
         let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::RAYWHITE);
+        d.clear_background(Color::BLACK);
 
         let mut d = d.begin_mode2D(camera);
 
@@ -323,11 +323,11 @@ fn main() {
             let [i, j] = edge.adj.map(usize::from);
             let p0 = graph.verts[i].pos;
             let p1 = graph.verts[j].pos;
-            d.draw_line_v(p0, p1, Color::BLACK);
+            d.draw_line_v(p0, p1, Color::RED.alpha(0.25));
         }
 
         for vert in &graph.verts {
-            d.draw_circle_v(vert.pos, 5.0, Color::BLACK);
+            d.draw_circle_v(vert.pos, 8.0, Color::RED);
         }
     }
 }
