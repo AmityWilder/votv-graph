@@ -1,6 +1,96 @@
 use std::collections::VecDeque;
-// use std::time::{Duration, Instant};
+use std::time::Instant;
+use std::borrow::Cow;
 use raylib::prelude::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleLineCategory {
+    Route,
+
+    Command,
+    TargetList,
+
+    Trace,
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Fatal,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsoleLine {
+    cat: ConsoleLineCategory,
+    msg: String,
+}
+
+impl ConsoleLine {
+    pub fn as_line_ref(&self) -> ConsoleLineRef<'_> {
+        ConsoleLineRef {
+            cat: self.cat,
+            msg: Cow::Borrowed(&self.msg),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsoleLineRef<'a> {
+    cat: ConsoleLineCategory,
+    msg: Cow<'a, str>,
+}
+
+pub struct Console {
+    pub route: ConsoleLine,
+    pub input: ConsoleLine,
+    pub route_debug: Vec<ConsoleLine>,
+}
+
+impl Console {
+    pub const fn new() -> Self {
+        Self {
+            route: ConsoleLine {
+                cat: ConsoleLineCategory::Route,
+                msg: String::new(),
+            },
+            input: ConsoleLine {
+                cat: ConsoleLineCategory::TargetList,
+                msg: String::new(),
+            },
+            route_debug: Vec::new(),
+        }
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = ConsoleLineRef<'_>> {
+        std::iter::once(self.input.as_line_ref())
+        .chain(self.route_debug.iter().map(|item| item.as_line_ref()))
+    }
+
+    pub fn write(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
+        while self.route_debug.len() > depth {
+            self.route_debug.pop();
+        }
+        if self.route_debug.len() == depth {
+            self.route_debug.push(ConsoleLine { cat, msg: msg.to_string() });
+        } else {
+            panic!("cannot push more than one depth (current depth: {}, write depth: {})\nconsole: {:?}\nwanted to print: \"{:?}\"",
+                self.route_debug.len() as isize - 1,
+                depth,
+                &self.route_debug,
+                msg,
+            );
+        }
+    }
+}
+
+macro_rules! write_cout {
+    ($dst:expr, $level:ident, $depth:expr, $($args:tt)+) => {
+        $dst.write(
+            ConsoleLineCategory::$level,
+            $depth,
+            format_args!($($args)+),
+        )
+    };
+}
 
 type VertexID = u16;
 
@@ -28,24 +118,11 @@ pub struct Edge {
     pub weight: f32,
 }
 
-pub trait VertexIndex {
-    fn vertex_index(&self, graph: &WeightedGraph) -> Option<VertexID>;
-}
-impl VertexIndex for VertexID {
-    fn vertex_index(&self, _graph: &WeightedGraph) -> Option<VertexID> {
-        Some(*self)
-    }
-}
-impl VertexIndex for str {
-    fn vertex_index(&self, graph: &WeightedGraph) -> Option<VertexID> {
-        graph.verts.iter().position(|v| &v.id == self)?.try_into().ok()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct WeightedGraph {
     pub verts: Vec<Vertex>,
     pub edges: Vec<Edge>,
+    pub adjacent: Vec<Vec<Adjacent>>,
 }
 
 pub enum Phase {
@@ -65,13 +142,35 @@ pub enum Phase {
         i: usize,
     },
 }
+impl WeightedGraph {
+    pub fn new(verts: Vec<Vertex>, edges: Vec<Edge>) -> Self {
+        Self {
+            adjacent: (0..verts.len() as VertexID)
+                .map(|v| edges.iter()
+                    .filter_map(|e|
+                        if e.adj[0] == v {
+                            Some(Adjacent { vertex: e.adj[1], weight: e.weight })
+                        } else if e.adj[1] == v {
+                            Some(Adjacent { vertex: e.adj[0], weight: e.weight })
+                        } else { None }
+                    ).collect()
+                ).collect(),
+            verts,
+            edges,
+        }
+    }
 
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+    pub fn verts_iter(&self) -> impl ExactSizeIterator<Item = (VertexID, &Vertex)> + DoubleEndedIterator {
+        self.verts.iter().enumerate().map(|(v, vert)| (v as VertexID, vert))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Visit {
     distance: f32,
     parent: Option<VertexID>,
 }
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Adjacent {
     vertex: VertexID,
     weight: f32,
@@ -85,7 +184,6 @@ pub struct RouteGenerator<'a> {
     pub queue: VecDeque<VertexID>,
     pub phase: Phase,
     pub graph: &'a WeightedGraph,
-    pub adjacent: Vec<Vec<Adjacent>>,
     pub is_finished: bool,
 }
 
@@ -99,65 +197,78 @@ impl<'a> RouteGenerator<'a> {
             queue: VecDeque::new(),
             phase: Phase::None,
             graph,
-            adjacent: (0..graph.verts.len() as VertexID)
-                .map(|v| graph.edges.iter()
-                    .filter_map(|e|
-                        if e.adj[0] == v {
-                            Some(Adjacent { vertex: e.adj[1], weight: e.weight })
-                        } else if e.adj[1] == v {
-                            Some(Adjacent { vertex: e.adj[0], weight: e.weight })
-                        } else { None }
-                    ).collect()
-                ).collect(),
             is_finished: false,
         }
     }
 
-    pub fn step(&mut self, mut debug_msg: impl FnMut(std::fmt::Arguments<'_>)) {
+    fn begin_phase_none(&mut self, _console: &mut Console) {
+        todo!()
+    }
+
+    fn begin_phase_edge(&mut self, console: &mut Console) {
+        write_cout!(console, Info, 1, "edge phase");
+        write_cout!(console, Debug, 2, "looking at vertex {}", self.root);
+        self.queue.clear();
+        self.visited.fill(const { None });
+        self.visited[self.root as usize] = Some(Visit { distance: 0.0, parent: None });
+        self.phase = Phase::Edge {
+            current: self.root,
+            i: 0,
+        };
+    }
+
+    fn begin_phase_target(&mut self, console: &mut Console) {
+        write_cout!(console, Info, 1, "target phase");
+        self.phase = Phase::Target {
+            shortest_distance: f32::INFINITY,
+            nearest_target: usize::MAX,
+            i: 0,
+        };
+    }
+
+    fn begin_phase_backtrack(&mut self, console: &mut Console) {
+        write_cout!(console, Info, 1, "backtrack phase");
+        let insert_at = self.result.len();
+        self.phase = Phase::Backtrack {
+            parent: self.root,
+            insert_at,
+            i: 0,
+        };
+    }
+
+    pub fn step(&mut self, console: &mut Console) {
         debug_assert!(!self.is_finished, "do not continue finished route");
         match &mut self.phase {
             Phase::None => {
-                debug_msg(format_args!("root set to vertex {}; targeting {:?}", self.root, self.targets));
-                debug_msg(format_args!("  edge phase"));
-                self.queue.clear();
-                self.visited.fill(const { None });
-                self.visited[self.root as usize] = Some(Visit { distance: 0.0, parent: None });
-                self.phase = Phase::Edge {
-                    current: self.root,
-                    i: 0,
-                };
+                write_cout!(console, Info, 0, "root set to vertex {}; targeting {:?}", self.root, self.targets);
+                self.begin_phase_edge(console);
             }
 
             Phase::Edge { current, i } => {
-                if let Some(&Adjacent { vertex, weight }) = self.adjacent[*current as usize].get(*i) {
+                if let Some(&Adjacent { vertex, weight }) = self.graph.adjacent[*current as usize].get(*i) {
                     if self.visited[vertex as usize].is_none() {
                         self.queue.push_back(vertex);
-                        // println!("      pushed vertex {vertex} to queue");
-                        for &Adjacent { vertex, .. } in &self.adjacent[vertex as usize] {
+                        write_cout!(console, Info, 3, "pushed vertex {vertex} to queue");
+                        for &Adjacent { vertex, .. } in &self.graph.adjacent[vertex as usize] {
                             if !self.queue.contains(&vertex) {
                                 self.queue.push_back(vertex);
-                                // println!("      pushed vertex {vertex} to queue");
+                                write_cout!(console, Info, 3, "pushed vertex {vertex} to queue");
                             }
                         }
                     }
                     let distance = self.visited[*current as usize].expect("current must have been visited if it is queued").distance + weight;
                     if self.visited[vertex as usize].is_none_or(|visit| distance < visit.distance) {
                         self.visited[vertex as usize] = Some(Visit { distance, parent: Some(*current) });
-                        debug_msg(format_args!("      vertex {vertex} is {distance} from root (vertex {}) through vertex {current}, new best", self.root));
+                        write_cout!(console, Info, 3, "vertex {vertex} is {distance} from root (vertex {}) through vertex {current}, new best", self.root);
                     }
                     *i += 1;
                 } else {
                     if let Some(next_vert) = self.queue.pop_front() {
                         *current = next_vert;
                         *i = 0;
-                        // debug_msg(format_args!("    looking at vertex {current}"));
+                        write_cout!(console, Debug, 2, "looking at vertex {current}");
                     } else {
-                        debug_msg(format_args!("  target phase"));
-                        self.phase = Phase::Target {
-                            shortest_distance: f32::INFINITY,
-                            nearest_target: usize::MAX,
-                            i: 0,
-                        };
+                        self.begin_phase_target(console);
                     }
                 }
             }
@@ -166,9 +277,9 @@ impl<'a> RouteGenerator<'a> {
                 if *i < self.targets.len() {
                     let v = self.targets[*i];
                     if let Some(Visit { distance, .. }) = self.visited[v as usize] {
-                        debug_msg(format_args!("    target {} (vertex {v}) is {distance} from root (vertex {})", *i, self.root));
+                        write_cout!(console, Info, 2, "target {} (vertex {v}) is {distance} from root (vertex {})", *i, self.root);
                         if distance < *shortest_distance {
-                            debug_msg(format_args!("      updating nearest target to {} (vertex {v})", *i));
+                            write_cout!(console, Info, 3, "updating nearest target to {} (vertex {v})", *i);
                             *shortest_distance = distance;
                             *nearest_target = *i;
                         }
@@ -177,14 +288,8 @@ impl<'a> RouteGenerator<'a> {
                 } else {
                     assert!(*nearest_target < self.targets.len());
                     self.root = self.targets.swap_remove(*nearest_target);
-                    debug_msg(format_args!("    nearest target identified as vertex {}", self.root));
-                    debug_msg(format_args!("  backtrack phase"));
-                    let insert_at = self.result.len();
-                    self.phase = Phase::Backtrack {
-                        parent: self.root,
-                        insert_at,
-                        i: 0,
-                    };
+                    write_cout!(console, Info, 2, "nearest target identified as vertex {}", self.root);
+                    self.begin_phase_backtrack(console);
                 }
             }
 
@@ -193,30 +298,23 @@ impl<'a> RouteGenerator<'a> {
                     self.result.insert(*insert_at, *parent);
                     *parent = *p;
                 } else {
-                    debug_msg(format_args!("    adding vertex {} to results", self.root));
-                    debug_msg(format_args!("  edge phase"));
-                    self.queue.clear();
-                    self.visited.fill(const { None });
+                    write_cout!(console, Info, 2, "adding vertex {} to results", self.root);
                     if self.targets.is_empty() {
-                        debug_msg(format_args!("final route: {:?}", self.result));
+                        write_cout!(console, Info, 0, "final route: {:?}", self.result);
                         self.is_finished = true;
                         let mut distance = 0.0;
                         self.visited[self.result[0] as usize] = Some(Visit { distance, parent: None });
                         if *i + 1 < self.result.len() {
                             let a = &self.result[*i];
                             let b = &self.result[*i + 1];
-                            distance += self.adjacent[*a as usize].iter()
+                            distance += self.graph.adjacent[*a as usize].iter()
                                 .find_map(|e| (&e.vertex == b).then_some(e.weight))
                                 .expect("results should be adjacent");
                             self.visited[*b as usize] = Some(Visit { distance, parent: Some(*a) });
                             *i += 1;
                         }
                     } else {
-                        self.visited[self.root as usize] = Some(Visit { distance: 0.0, parent: None });
-                        self.phase = Phase::Edge {
-                            current: self.root,
-                            i: 0,
-                        };
+                        self.begin_phase_edge(console);
                     }
                 }
             }
@@ -225,7 +323,7 @@ impl<'a> RouteGenerator<'a> {
 }
 
 macro_rules! define_verts {
-    ($($v_id:ident ($v_alias:ident) = ($x:expr, $y:expr, $z:expr);)*) => {
+    ($name:ident: $($v_id:ident ($v_alias:ident) = ($x:expr, $y:expr, $z:expr);)*) => {
         #[allow(nonstandard_style, unused)]
         #[derive(Clone, Copy)]
         pub enum VertexNames { $($v_id),* }
@@ -237,24 +335,22 @@ macro_rules! define_verts {
             pub const fn id(self) -> VertexID {
                 self as VertexID
             }
-            pub fn verts() -> Vec<Vertex> {
-                vec![$(Vertex::new(stringify!($v_id), stringify!($v_alias), $x, $y, $z)),*]
-            }
         }
         #[allow(unused)]
         use VertexNames::{$($v_id as $v_alias),*};
+        let $name = vec![$(Vertex::new(stringify!($v_id), stringify!($v_alias), $x, $y, $z)),*];
     };
 }
 
 macro_rules! define_edges {
-    ($($a:ident--$b:ident),* $(,)?) => {
-        vec![$(
+    ($name:ident: $($a:ident--$b:ident),* $(,)?) => {
+        let $name = vec![$(
             Edge {
                 id: None,
                 adj: [$a.id(), $b.id()],
                 weight: $a.distance_to($b),
             },
-        )*]
+        )*];
     };
 }
 
@@ -270,6 +366,7 @@ fn main() {
     rl.set_target_fps(120);
 
     define_verts!{
+        verts:
         // Satellites
         Alpha    (A) = (   0.0, 0.0,    0.0);
         Bravo    (B) = (-100.0, 0.0, -200.0);
@@ -315,7 +412,8 @@ fn main() {
         Bridge_Oscar_West  (brOw) = ( 295.5, 0.0, -345.0); // Bridge Oscar West
     }
 
-    let edges = define_edges!(
+    define_edges!{
+        edges:
         A -- E,   A -- F,   A -- G,   A -- H,   A -- I,   A -- J,   A -- P,
         E -- F,   E -- H,   E -- I,   E -- J,   E -- O,   E -- P,   E -- T,   E -- U,   E -- V,   E -- TR1,
         F -- G,   F -- H,   F -- I,   F -- J,   F -- O,   F -- P,   F -- W,   F -- T,   F -- U,   F -- V,   F -- TR1,
@@ -383,78 +481,78 @@ fn main() {
         brAe -- brAw,
         brEe -- brEw,
         brOe -- brOw,
-    );
+    }
 
-    let graph = WeightedGraph {
-        verts: VertexNames::verts(),
-        edges,
-    };
+    let graph = WeightedGraph::new(verts, edges);
 
     let mut route = RouteGenerator::new(&graph, A.id(), [S.id(), N.id(), TR3.id(), G.id(), TR1.id(), Q.id(), J.id(), Y.id(), T.id(), O.id()]);
-    // let mut last_route_step = Instant::now();
     let mut is_paused = false;
     let mut was_paused = false; // paused before giving command
 
     let mut camera = Camera3D::perspective(Vector3::new(0.0, 820.0, 0.0), Vector3::zero(), Vector3::new(0.0, 0.0, -1.0), 70.0);
 
     let mut is_giving_command = false;
-    let mut command = String::new();
-    let mut console_out: Vec<String> = Vec::with_capacity(5);
+    let mut console: Console = Console::new();
+
+    let mut last_route_step = Instant::now();
+    let mut tempo_ticks = 1;
+    let mut tempo_ms = 16;
 
     while !rl.window_should_close() {
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
             is_giving_command = !is_giving_command;
             if is_giving_command {
+                // begin giving command
                 was_paused = is_paused;
                 is_paused = true;
+
+                console.input.cat = ConsoleLineCategory::Command;
+                console.input.msg = String::new();
             } else {
+                // finish giving command
                 is_paused = was_paused;
-            }
-            if !is_giving_command { // finished giving command
+
                 let mut targets = Vec::new();
+                let command = std::mem::replace(&mut console.input.msg, String::new());
                 for id in command.split(' ') {
-                    let candidates: Vec<VertexID> = graph.verts.iter()
-                        .enumerate()
-                        .filter(|(_, vert)| !vert.id.starts_with("Bridge"))
-                        .filter(|(_, vert)| vert.id == id || vert.alias == id)
-                        .map(|(v, _)| v as VertexID)
+                    let candidates: Vec<VertexID> = graph.verts_iter()
+                        .filter_map(|(v, vert)| (!vert.id.starts_with("Bridge") && (vert.id == id || vert.alias == id)).then_some(v))
                         .collect();
                     match candidates.as_slice() {
                         &[] => {
-                            console_out.push(format_args!("error: no vertex id {id}").to_string());
+                            write_cout!(console, Error, 0, "no vertex id {id}");
                         }
                         &[v] => {
                             if targets.contains(&v) {
-                                console_out.push(format_args!("warning: vertex {v} is already a target").to_string());
+                                write_cout!(console, Error, 0, "vertex {v} is already a target");
                             } else {
-                                console_out.push(format_args!("adding vertex {v} to targets").to_string());
+                                write_cout!(console, Info, 0, "adding vertex {v} to targets");
                                 targets.push(v);
                             }
                         }
                         &[..] => {
-                            console_out.push(format_args!("error: {} matches for \"{id}\" including {:?}", candidates.len(), &candidates).to_string());
+                            write_cout!(console, Error, 0, "{} matches for \"{id}\" including {:?}", candidates.len(), &candidates);
                         }
                     }
                 }
-                command.clear();
                 let mut iter = targets.into_iter();
                 if let Some(first) = iter.next() {
                     if iter.len() != 0 {
                         route = RouteGenerator::new(&graph, first, iter);
                     } else {
-                        console_out.push(format_args!("warning: no targets provided").to_string());
+                        write_cout!(console, Warning, 0, "no targets provided");
                     }
                 } else {
-                    console_out.push(format_args!("warning: no start point provided").to_string());
+                    write_cout!(console, Warning, 0, "no start point provided");
                 }
             }
         }
 
         if is_giving_command {
             if let Some(ch) = rl.get_char_pressed() {
-                command.push(ch);
+                console.input.msg.push(ch);
             } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
-                command.pop();
+                console.input.msg.pop();
             }
         } else {
             let speed = 4.0*camera.position.distance_to(camera.target)/1000.0;
@@ -471,7 +569,7 @@ fn main() {
             if rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
                 if !is_paused && rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) { // sprint
                     while !route.is_finished {
-                        route.step(|msg| console_out.push(msg.to_string()));
+                        route.step(&mut console);
                     }
                 } else {
                     is_paused = !is_paused;
@@ -480,10 +578,19 @@ fn main() {
         }
 
         if !is_paused && !route.is_finished {
-            // if last_route_step.elapsed() >= Duration::from_secs_f32(0.1) {
-                // last_route_step = Instant::now();
-                route.step(|msg| console_out.push(msg.to_string()));
-            // }
+            if let Some(tempo_ms) = std::num::NonZeroU128::new(tempo_ms) {
+                let ticks = last_route_step.elapsed().as_millis()/tempo_ms;
+                if ticks > 0 {
+                    for _ in 0..ticks*tempo_ticks {
+                        route.step(&mut console);
+                    }
+                    last_route_step = Instant::now();
+                }
+            } else {
+                for _ in 0..tempo_ticks {
+                    route.step(&mut console);
+                }
+            }
         }
 
         let route = &route;
@@ -501,13 +608,13 @@ fn main() {
                 d.draw_line_3D(p0, p1, Color::RED.alpha(0.25));
             }
 
-            for (v, vert) in graph.verts.iter().enumerate().map(|(v, vert)| (v as VertexID, vert)) {
+            for (v, vert) in graph.verts_iter() {
                 let distance_from_target = vert.pos - camera.target;
                 let color = loop {
                     if let Phase::Edge { current, i } = &route.phase {
                         if &v == current {
                             break Color::SKYBLUE;
-                        } else if route.adjacent[*current as usize].get(*i).is_some_and(|x| &v == &x.vertex) {
+                        } else if graph.adjacent[*current as usize].get(*i).is_some_and(|x| &v == &x.vertex) {
                             break Color::ORANGE;
                         }
                     }
@@ -541,7 +648,7 @@ fn main() {
             d.draw_line_3D(camera.target + Vector3::new( 0.0, 0.0, -5.0), camera.target + Vector3::new(0.0, 0.0, 5.0), Color::BLUEVIOLET);
         }
 
-        for (v, vert) in graph.verts.iter().enumerate().map(|(v, vert)| (v as VertexID, vert)) {
+        for (v, vert) in graph.verts_iter() {
             let pos = d.get_world_to_screen(vert.pos, camera);
             let text_width = d.measure_text(&vert.alias, 10);
             d.draw_text(&vert.alias, pos.x as i32 - text_width/2, pos.y as i32 - 5, 10, Color::WHITE);
@@ -551,17 +658,38 @@ fn main() {
                 d.draw_text(&text, pos.x as i32 + text_width/2 + 3, pos.y as i32 + 3, 10, Color::GRAY);
             }
         }
-        let route_text: Vec<&str> = route.result.iter().map(|&v| graph.verts[v as usize].id.as_str()).collect();
-        let route_text = route_text.join(" - ");
-        d.draw_text(&route_text, 0, 0, 10, Color::RAYWHITE);
-        if is_giving_command {
-            d.draw_text(&format!("> {command}"), 0, 10, 10, Color::LIGHTBLUE);
-        } else {
-            let target_text: Vec<&str> = route.targets.iter().map(|&v| graph.verts[v as usize].id.as_str()).collect();
-            d.draw_text(&format!("> targets: {:?}", target_text), 0, 10, 10, Color::GREEN);
+
+        // Console
+
+        console.route.msg = route.result.iter()
+            .map(|&v| graph.verts[v as usize].id.as_str())
+            .collect::<Vec<&str>>()
+            .join(" - ");
+
+        if !is_giving_command {
+            let target_text = route.targets.iter()
+                .map(|&v| graph.verts[v as usize].id.as_str())
+                .collect::<Vec<&str>>()
+                .join(", ");
+            console.input = ConsoleLine {
+                cat: ConsoleLineCategory::TargetList,
+                msg: target_text,
+            }
         }
-        for (i, line) in console_out[console_out.len().saturating_sub(5)..].iter().enumerate() {
-            d.draw_text(&format!("] {line}"), 0, 20 + 10*i as i32, 10, Color::DARKGRAY);
+
+        for (i, line) in console.iter().enumerate() {
+            let (color, prefix) = match line.cat {
+                ConsoleLineCategory::Route      => (Color::RAYWHITE,  "route: "),
+                ConsoleLineCategory::Command    => (Color::LIGHTBLUE, "> "),
+                ConsoleLineCategory::TargetList => (Color::LIME,      "targets: "),
+                ConsoleLineCategory::Trace      => (Color::DARKGRAY,  "trace: "),
+                ConsoleLineCategory::Debug      => (Color::MAGENTA,   "debug: "),
+                ConsoleLineCategory::Info       => (Color::LIGHTGRAY, ""),
+                ConsoleLineCategory::Warning    => (Color::GOLD,      "warning: "),
+                ConsoleLineCategory::Error      => (Color::RED,       "error: "),
+                ConsoleLineCategory::Fatal      => (Color::SALMON,    "fatal: "),
+            };
+            d.draw_text(&format!("{prefix}{}", line.msg), 0, 10*i as i32, 10, color);
         }
     }
 }
