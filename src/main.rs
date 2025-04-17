@@ -267,6 +267,8 @@ fn main() {
         .resizable()
         .build();
 
+    rl.set_target_fps(120);
+
     define_verts!{
         // Satellites
         Alpha    (A) = (   0.0, 0.0,    0.0);
@@ -455,7 +457,7 @@ fn main() {
                 command.pop();
             }
         } else {
-            let speed = camera.position.distance_to(camera.target)/1000.0;
+            let speed = 4.0*camera.position.distance_to(camera.target)/1000.0;
             let north = (rl.is_key_down(KeyboardKey::KEY_W) as i8 - rl.is_key_down(KeyboardKey::KEY_S) as i8) as f32*speed;
             let east  = (rl.is_key_down(KeyboardKey::KEY_D) as i8 - rl.is_key_down(KeyboardKey::KEY_A) as i8) as f32*speed;
             let up    = (rl.is_key_down(KeyboardKey::KEY_Q) as i8 - rl.is_key_down(KeyboardKey::KEY_E) as i8) as f32*speed;
@@ -467,7 +469,13 @@ fn main() {
             camera.target += pan;
 
             if rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
-                is_paused = !is_paused;
+                if !is_paused && rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) { // sprint
+                    while !route.is_finished {
+                        route.step(|msg| console_out.push(msg.to_string()));
+                    }
+                } else {
+                    is_paused = !is_paused;
+                }
             }
         }
 
