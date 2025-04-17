@@ -144,26 +144,25 @@ impl<'a> RouteGenerator<'a> {
                 if let Some(&Adjacent { vertex, weight }) = self.adjacent[*current as usize].get(*i) {
                     if self.visited[vertex as usize].is_none() {
                         self.queue.push_back(vertex);
-                        println!("      pushed vertex {vertex} to queue");
+                        // println!("      pushed vertex {vertex} to queue");
                         for &Adjacent { vertex, .. } in &self.adjacent[vertex as usize] {
                             if !self.queue.contains(&vertex) {
                                 self.queue.push_back(vertex);
-                                println!("      pushed vertex {vertex} to queue");
+                                // println!("      pushed vertex {vertex} to queue");
                             }
                         }
                     }
                     let distance = self.visited[*current as usize].expect("current must have been visited if it is queued").distance + weight;
-                    println!("      vertex {vertex} is {distance} from root (vertex {}) through vertex {current}", self.root);
                     if self.visited[vertex as usize].is_none_or(|visit| distance < visit.distance) {
                         self.visited[vertex as usize] = Some(Visit { distance, parent: Some(*current) });
-                        println!("        updating vertex {vertex} best route");
+                        println!("      vertex {vertex} is {distance} from root (vertex {}) through vertex {current}, new best", self.root);
                     }
                     *i += 1;
                 } else {
                     if let Some(next_vert) = self.queue.pop_front() {
                         *current = next_vert;
                         *i = 0;
-                        println!("    looking at vertex {current}");
+                        // println!("    looking at vertex {current}");
                     } else {
                         println!("  target phase");
                         self.phase = Phase::Target {
@@ -193,7 +192,6 @@ impl<'a> RouteGenerator<'a> {
                     println!("    nearest target identified as vertex {}", self.root);
                     println!("  backtrack phase");
                     let insert_at = self.result.len();
-                    self.result.push(self.root);
                     self.phase = Phase::Backtrack {
                         parent: self.root,
                         insert_at,
@@ -203,7 +201,6 @@ impl<'a> RouteGenerator<'a> {
 
             Phase::Backtrack { parent, insert_at } => {
                 if let Some(Visit { parent: Some(p), .. }) = &self.visited[*parent as usize] {
-                    println!("    parent of  {}", self.result[*insert_at]);
                     self.result.insert(*insert_at, *parent);
                     *parent = *p;
                 } else {
@@ -214,6 +211,15 @@ impl<'a> RouteGenerator<'a> {
                     if self.targets.is_empty() {
                         println!("final route: {:?}", self.result);
                         self.is_finished = true;
+                        let mut distance = 0.0;
+                        self.visited[self.result[0] as usize] = Some(Visit { distance, parent: None });
+                        for pair in self.result.windows(2) {
+                            let [a, b] = pair else { unreachable!("windows(2) should always have 2 elements") };
+                            distance += self.adjacent[*a as usize].iter()
+                                .find_map(|e| (&e.vertex == b).then_some(e.weight))
+                                .expect("results should be adjacent");
+                            self.visited[*b as usize] = Some(Visit { distance, parent: Some(*a) });
+                        }
                     } else {
                         self.visited[self.root as usize] = Some(Visit { distance: 0.0, parent: None });
                         self.phase = Phase::Edge {
@@ -233,7 +239,7 @@ macro_rules! define_verts {
         #[derive(Clone, Copy)]
         pub enum VertexNames { $($v_id),* }
         impl VertexNames {
-            pub const POSITIONS: [Vector2; [$($x),*].len()] = [$(Vector2::new($x as f32, $y as f32)),*];
+            pub const POSITIONS: [Vector3; [$($x),*].len()] = [$(Vector3::new($x as f32, $y as f32, $z as f32)),*];
             pub fn distance_to(self, other: VertexNames) -> f32 {
                 Self::POSITIONS[self as usize].distance_to(Self::POSITIONS[other as usize])
             }
@@ -390,10 +396,11 @@ fn main() {
         edges,
     };
 
-    let mut route = RouteGenerator::new(&graph, A.id(), [N.id(), TR3.id()]);
+    let mut route = RouteGenerator::new(&graph, A.id(), [S.id(), N.id(), TR3.id(), G.id(), TR1.id()]);
     // let mut last_route_step = Instant::now();
+    let mut is_paused = false;
 
-    let mut camera = Camera3D::perspective(Vector3::new(0.0, 1000.0, 0.0), Vector3::zero(), Vector3::new(0.0, 0.0, -1.0), 70.0);
+    let mut camera = Camera3D::perspective(Vector3::new(0.0, 800.0, 0.0), Vector3::zero(), Vector3::new(0.0, 0.0, -1.0), 70.0);
 
     while !rl.window_should_close() {
         let speed = camera.position.distance_to(camera.target)/1000.0;
@@ -407,7 +414,11 @@ fn main() {
         camera.position += pan + zoom;
         camera.target += pan;
 
-        if !route.is_finished {
+        if rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
+            is_paused = !is_paused;
+        }
+
+        if !is_paused && !route.is_finished {
             // if last_route_step.elapsed() >= Duration::from_secs_f32(0.1) {
                 // last_route_step = Instant::now();
                 route.step();
@@ -439,7 +450,7 @@ fn main() {
                             break Color::ORANGE;
                         }
                     }
-                    if v == route.root {
+                    if !route.is_finished && v == route.root {
                         break Color::BLUE;
                     } else if route.result.contains(&v) {
                         break Color::BLUEVIOLET;
@@ -475,9 +486,12 @@ fn main() {
             d.draw_text(&vert.id, pos.x as i32 - text_width/2, pos.y as i32 - 5, 10, Color::WHITE);
             if let Some(Visit { distance, parent }) = route.visited[v as usize] {
                 let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].id);
-                let text = format!("{distance} ({parent_text})");
+                let text = format!("{} ({parent_text})", distance.ceil());
                 d.draw_text(&text, pos.x as i32 + text_width/2 + 3, pos.y as i32 + 3, 10, Color::GRAY);
             }
         }
+        let route_text: Vec<&str> = route.result.iter().map(|&v| graph.verts[v as usize].id.as_str()).collect();
+        let route_text = route_text.join("--");
+        d.draw_text(&route_text, 0, 0, 10, Color::RAYWHITE);
     }
 }
