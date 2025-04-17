@@ -61,8 +61,9 @@ impl Console {
     }
 
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = ConsoleLineRef<'_>> {
-        std::iter::once(self.input.as_line_ref())
-        .chain(self.route_debug.iter().map(|item| item.as_line_ref()))
+        std::iter::once(self.route.as_line_ref())
+            .chain(std::iter::once(self.input.as_line_ref()))
+            .chain(self.route_debug.iter().map(|item| item.as_line_ref()))
     }
 
     pub fn write(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
