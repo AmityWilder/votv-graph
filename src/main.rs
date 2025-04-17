@@ -322,29 +322,29 @@ fn main() {
     }
 
     let edges = define_edges!(
-        A -- E,   A -- F,   A -- G,   A -- H,   A -- I,   A -- J,   A -- O,   A -- P, /*A -- W,   A -- T,   A -- U,   A -- V,   A -- TR1,*/
-        E -- F, /*E -- G,*/ E -- H,   E -- I,   E -- J,   E -- O,   E -- P, /*E -- W,*/ E -- T,   E -- U,   E -- V,   E -- TR1,
+        A -- E,   A -- F,   A -- G,   A -- H,   A -- I,   A -- J,   A -- P,
+        E -- F,   E -- H,   E -- I,   E -- J,   E -- O,   E -- P,   E -- T,   E -- U,   E -- V,   E -- TR1,
         F -- G,   F -- H,   F -- I,   F -- J,   F -- O,   F -- P,   F -- W,   F -- T,   F -- U,   F -- V,   F -- TR1,
         G -- H,   G -- I,   G -- J,   G -- O,   G -- P,   G -- W,   G -- T,   G -- U,   G -- V,   G -- TR1,
-        H -- I, /*H -- J,*/ H -- O,   H -- P,   H -- W,   H -- T,   H -- U,   H -- V,   H -- TR1,
-        I -- J,   I -- O,   I -- P,   I -- W,   I -- T,   I -- U,   I -- V, /*I -- TR1,*/
-        J -- O,   J -- P,   J -- W,   J -- T, /*J -- U,*/ J -- V, /*J -- TR1,*/
+        H -- I,   H -- O,   H -- P,   H -- W,   H -- T,   H -- U,   H -- V,   H -- TR1,
+        I -- J,   I -- O,   I -- P,   I -- W,   I -- T,   I -- U,   I -- V,
+        J -- O,   J -- P,   J -- W,   J -- T,   J -- V,
         O -- P,   O -- W,   O -- T,   O -- U,   O -- V,   O -- TR1,
         P -- W,   P -- T,   P -- U,   P -- V,   P -- TR1,
-      /*W -- T,*/ W -- U,   W -- V,   W -- TR1,
-        T -- U, /*T -- V,*/ T -- TR1,
+        W -- U,   W -- V,   W -- TR1,
+        T -- U,   T -- TR1,
         U -- V,   U -- TR1,
         V -- TR1,
-        B -- C, /*B -- D,*/ B -- K,   B -- L,   B -- M,   B -- N,   B -- Q,   B -- R,   B -- S,   B -- X,   B -- Y,   B -- TR2, B -- TR3,
+        B -- C,   B -- K,   B -- L,   B -- M,   B -- N,   B -- Q,   B -- R,   B -- S,   B -- X,   B -- Y,   B -- TR2, B -- TR3,
         C -- D,   C -- K,   C -- L,   C -- M,   C -- N,   C -- Q,   C -- R,   C -- S,   C -- X,   C -- Y,   C -- TR2, C -- TR3,
-        D -- K,   D -- L,   D -- M,   D -- N,   D -- Q,   D -- R,   D -- S,   D -- X, /*D -- Y,*/ D -- TR2, D -- TR3,
-        K -- L, /*K -- M,*/ K -- N,   K -- Q,   K -- R, /*K -- S,*/ K -- X,   K -- Y,   K -- TR2, K -- TR3,
+        D -- K,   D -- L,   D -- M,   D -- N,   D -- R,   D -- S,   D -- X,   D -- TR2, D -- TR3,
+        K -- L,   K -- N,   K -- Q,   K -- R,   K -- X,   K -- Y,   K -- TR2, K -- TR3,
         L -- M,   L -- N,   L -- Q,   L -- R,   L -- S,   L -- X,   L -- Y,   L -- TR2, L -- TR3,
         M -- N,   M -- Q,   M -- R,   M -- S,   M -- X,   M -- Y,   M -- TR2, M -- TR3,
         N -- Q,   N -- R,   N -- S,   N -- X,   N -- Y,   N -- TR2, N -- TR3,
-        Q -- R,   Q -- S,   Q -- X,   Q -- Y,   Q -- TR2, Q -- TR3,
-        R -- S, /*R -- X,*/ R -- Y,   R -- TR2, R -- TR3,
-      /*S -- X,*/ S -- Y,   S -- TR2, S -- TR3,
+        Q -- R,   Q -- X,   Q -- Y,   Q -- TR2, Q -- TR3,
+        R -- S,   R -- Y,   R -- TR2, R -- TR3,
+        S -- Y,   S -- TR2, S -- TR3,
         X -- Y,   X -- TR2, X -- TR3,
         Y -- TR2, Y -- TR3,
         TR2 -- TR3,
@@ -356,31 +356,31 @@ fn main() {
         brQ2 -- brA2,
         brA2 -- brE2,
         brE2 -- brO2,
-        A -- brA2, A -- brE2, A -- brO2, A -- brQ2,
+        A -- brA2, A -- brE2, A -- brQ2,
         E -- brA2, E -- brE2, E -- brO2, E -- brQ2, E -- brX2,
         F -- brA2, F -- brE2, F -- brO2, F -- brQ2, F -- brX2,
         G -- brA2, G -- brE2, G -- brO2, G -- brQ2, G -- brX2,
         H -- brA2, H -- brE2, H -- brO2, H -- brQ2, H -- brX2,
         I -- brA2, I -- brE2, I -- brO2, I -- brQ2, I -- brX2,
-        J -- brA2, J -- brE2, J -- brO2, J -- brQ2, J -- brX2,
-        O -- brA2, O -- brE2, O -- brO2, O -- brQ2, O -- brX2,
+        J -- brA2, J -- brE2, J -- brQ2, J -- brX2,
+        O -- brE2, O -- brO2, O -- brQ2, O -- brX2,
         P -- brA2, P -- brE2, P -- brO2, P -- brQ2, P -- brX2,
         W -- brA2, W -- brE2, W -- brO2, W -- brQ2, W -- brX2,
-        T -- brA2, T -- brE2, T -- brO2, T -- brQ2, T -- brX2,
+        T -- brE2, T -- brO2, T -- brQ2, T -- brX2,
         U -- brA2, U -- brE2, U -- brO2, U -- brQ2, U -- brX2,
         V -- brA2, V -- brE2, V -- brO2, V -- brQ2, V -- brX2,
         TR1 -- brA2, TR1 -- brE2, TR1 -- brO2, TR1 -- brQ2, TR1 -- brX2,
         B -- brA1, B -- brE1, B -- brO1, B -- brQ1, B -- brX1,
-        C -- brA1, C -- brE1, C -- brO1, C -- brQ1, C -- brX1,
-        D -- brA1, D -- brE1, D -- brO1, D -- brQ1, D -- brX1,
-        K -- brA1, K -- brE1, K -- brO1, K -- brQ1, K -- brX1,
+        C -- brA1, C -- brE1, C -- brO1, C -- brX1,
+        D -- brA1, D -- brE1, D -- brO1,
+        K -- brA1, K -- brO1, K -- brQ1,
         L -- brA1, L -- brE1, L -- brO1, L -- brQ1, L -- brX1,
         M -- brA1, M -- brE1, M -- brO1, M -- brQ1, M -- brX1,
         N -- brA1, N -- brE1, N -- brO1, N -- brQ1, N -- brX1,
-        Q -- brA1, Q -- brE1, Q -- brO1, Q -- brQ1, Q -- brX1,
+        Q -- brA1, Q -- brQ1, Q -- brX1,
         R -- brA1, R -- brE1, R -- brO1, R -- brQ1, R -- brX1,
-        S -- brA1, S -- brE1, S -- brO1, S -- brQ1, S -- brX1,
-        X -- brA1, X -- brE1, X -- brO1, X -- brQ1, X -- brX1,
+        S -- brA1, S -- brE1, S -- brO1, S -- brQ1,
+        X -- brA1, X -- brQ1, X -- brX1,
         Y -- brA1, Y -- brE1, Y -- brO1, Y -- brQ1, Y -- brX1,
         TR2 -- brA1, TR2 -- brE1, TR2 -- brO1, TR2 -- brQ1, TR2 -- brX1,
         TR3 -- brA1, TR3 -- brE1, TR3 -- brO1, TR3 -- brQ1, TR3 -- brX1,
@@ -396,7 +396,7 @@ fn main() {
         edges,
     };
 
-    let mut route = RouteGenerator::new(&graph, A.id(), [S.id(), N.id(), TR3.id(), G.id(), TR1.id()]);
+    let mut route = RouteGenerator::new(&graph, A.id(), [S.id(), N.id(), TR3.id(), G.id(), TR1.id(), Q.id(), J.id(), Y.id(), T.id(), O.id()]);
     // let mut last_route_step = Instant::now();
     let mut is_paused = false;
 
@@ -491,7 +491,7 @@ fn main() {
             }
         }
         let route_text: Vec<&str> = route.result.iter().map(|&v| graph.verts[v as usize].id.as_str()).collect();
-        let route_text = route_text.join("--");
+        let route_text = route_text.join(" - ");
         d.draw_text(&route_text, 0, 0, 10, Color::RAYWHITE);
     }
 }
