@@ -190,6 +190,24 @@ impl WeightedGraph {
     pub fn verts_iter(&self) -> impl ExactSizeIterator<Item = (VertexID, &Vertex)> + DoubleEndedIterator {
         self.verts.iter().enumerate().map(|(v, vert)| (v as VertexID, vert))
     }
+
+    pub fn add_edge(&mut self, a: VertexID, b: VertexID) {
+        let weight = self.verts[a as usize].pos.distance_to(self.verts[b as usize].pos);
+        self.edges.push(Edge {
+            id: None,
+            adj: [a, b],
+            weight,
+        });
+        self.adjacent[a as usize].push(Adjacent { vertex: b, weight });
+        self.adjacent[b as usize].push(Adjacent { vertex: a, weight });
+    }
+
+    pub fn add_vertex_auto(&mut self, id: impl ToString, alias: impl ToString, pos: Vector3) {
+        self.verts.push(Vertex { id: id.to_string(), alias: alias.to_string(), pos });
+        let new_vert = (self.verts.len() - 1) as VertexID;
+        self.adjacent.push(Vec::new());
+        self.add_edge(0, new_vert);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -386,6 +404,26 @@ macro_rules! define_edges {
     };
 }
 
+pub enum ParseCoordsError {
+    Syntax,
+    ParseFloat(std::num::ParseFloatError),
+}
+impl std::fmt::Display for ParseCoordsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseCoordsError::Syntax => write!(f, "expected x:<???>/y:<???>"),
+            ParseCoordsError::ParseFloat(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+pub fn parse_coords(coords: &str) -> Result<Vector3, ParseCoordsError> {
+    let (x, y) = coords.split_once('/').ok_or(ParseCoordsError::Syntax)?;
+    let x = if x.starts_with("x:") { x[2..].parse().map_err(|e| ParseCoordsError::ParseFloat(e))? } else { return Err(ParseCoordsError::Syntax) };
+    let y = if y.starts_with("y:") { y[2..].parse().map_err(|e| ParseCoordsError::ParseFloat(e))? } else { return Err(ParseCoordsError::Syntax) };
+    Ok(Vector3::new(x, 0.0, y))
+}
+
 fn main() {
     let (mut rl, thread) = init()
         .size(640, 640)
@@ -432,9 +470,9 @@ fn main() {
         Zulu     (Z) = ( 10000.0,   0.0,  10000.0);
 
         // Transformers
-        TR1 (TR1) = ( 400.0, 0.0,  200.0); // Transformer 1
-        TR2 (TR2) = (-540.0, 0.0,  232.0); // Transformer 2
-        TR3 (TR3) = (-400.0, 0.0, -475.0); // Transformer 3
+        TR_1 (TR1) = ( 400.0, 0.0,  200.0); // Transformer 1
+        TR_2 (TR2) = (-540.0, 0.0,  232.0); // Transformer 2
+        TR_3 (TR3) = (-400.0, 0.0, -475.0); // Transformer 3
 
         // Bridges
         Bridge_Alpha_East  (brAe) = ( -76.9, 0.0,   11.7); // Bridge Alpha East
@@ -520,16 +558,17 @@ fn main() {
         brOe -- brOw,
     }
 
-    let graph = WeightedGraph::new(verts, edges);
+    let mut graph = WeightedGraph::new(verts, edges);
 
-    let mut route = RouteGenerator::new(&graph, A.id(), []);
-    route.is_finished = true;
+    let mut route = None;
     let mut is_paused = false;
     let mut was_paused = false; // paused before giving command
 
     let mut camera = Camera3D::perspective(Vector3::new(0.0, 820.0, 0.0), Vector3::zero(), Vector3::new(0.0, 0.0, -1.0), 70.0);
 
     let mut is_giving_command = false;
+    let mut command_history = VecDeque::new();
+    let mut command_history_offset = 0;
     let mut console: Console = Console::new();
     let mut is_debugging = false;
 
@@ -551,88 +590,140 @@ fn main() {
                 // finish giving command
                 is_paused = was_paused;
 
-                let command = console.command.clone();
-                let mut args = command.split(' ');
-                if let Some(cmd) = args.next() {
-                    const CMD_HELP: &str = "help";
-                    const CMD_SV_ROUTE: &str = "sv.route";
-                    const CMD_SV_ROUTE_ADD: &str = "sv.route.add";
-                    const CMD_TEMPO: &str = "tempo";
-                    const CMD_DBG: &str = "dbg";
-                    match cmd {
-                        CMD_HELP => {
-                            write_cout!(@reply: console, Info, "\
-                                commands:\
-                                \n  {CMD_HELP}                           display this information\
-                                \n  {CMD_SV_ROUTE} <START> <TARGETS>...  generate the shortest route visiting each target (separated by spaces)\
-                                \n  {CMD_SV_ROUTE_ADD} <TARGETS>...      add more targets (separated by spaces) to the current route\
-                                \n  {CMD_TEMPO} <TICKS> <MILLISECONDS>   set the route tick speed in ticks per milliseconds\
-                                \n  {CMD_DBG}                            toggle route debug messages\
-                            ");
-                        }
+                if !console.command.is_empty() {
+                    command_history.push_front(console.command.clone());
+                    command_history_offset = 0;let mut args = command_history.front().unwrap().split(' ');
 
-                        CMD_SV_ROUTE => {
-                            let mut target_iter = args.map(|id|
-                                graph.verts_iter()
-                                    .position(|(_, vert)| (vert.id.eq_ignore_ascii_case(id) || vert.alias.eq_ignore_ascii_case(id)))
-                                    .map(|v| v as VertexID)
-                                    .ok_or(id)
-                                );
+                    if let Some(cmd) = args.next() {
+                        const CMD_HELP: &str = "help";
+                        const CMD_SV_ROUTE: &str = "sv.route";
+                        const CMD_SV_ROUTE_ADD: &str = "sv.route.add";
+                        const CMD_SV_M_: &str = "sv.m+";
+                        const CMD_TEMPO: &str = "tempo";
+                        const CMD_DBG: &str = "dbg";
+                        const CMD_CAM_FOCUS: &str = "cam.focus";
+                        match cmd {
+                            CMD_HELP => {
+                                write_cout!(@reply: console, Info, "\
+                                    commands:\
+                                    \n  {CMD_HELP}                                   display this information\
+                                    \n  {CMD_SV_ROUTE} <START> <TARGETS>...          generate the shortest route visiting each target (separated by spaces)\
+                                    \n  {CMD_SV_ROUTE_ADD} <TARGETS>...              add more targets (separated by spaces) to the current route\
+                                    \n  {CMD_SV_M_} <ID> [ALIAS] x:<???>/y:<???>...  create a new vertex that can be targeted\
+                                    \n  {CMD_TEMPO} <TICKS> <MILLISECONDS>           set the route tick speed in ticks per milliseconds\
+                                    \n  {CMD_DBG}                                    toggle route debug messages\
+                                    \n  {CMD_CAM_FOCUS} <TARGET>                     zoom in on a particular target\
+                                    \n  {CMD_CAM_FOCUS} reset                        reset camera orientation\
+                                ");
+                            }
 
-                            if let Some(first) = target_iter.next() {
-                                match first {
-                                    Ok(start) => {
-                                        let mut target_iter = target_iter.filter_map(|v| {
-                                            v.inspect(|v| write_cout!(@reply: console, Info, "adding vertex {v} to targets"))
-                                             .inspect_err(|id| write_cout!(@reply: console, Warning, "vertex \"{id}\" does not exist, skipping"))
-                                             .ok()
-                                        }).peekable();
-                                        if target_iter.peek().is_some() {
-                                            route = RouteGenerator::new(&graph, start, target_iter);
-                                            write_cout!(@reply: console, Info, "generating route");
-                                        } else {
-                                            write_cout!(@reply: console, Error, "no targets provided");
+                            CMD_SV_ROUTE => {
+                                let mut target_iter = args.map(|id|
+                                    graph.verts_iter()
+                                        .position(|(_, vert)| (vert.id.eq_ignore_ascii_case(id) || vert.alias.eq_ignore_ascii_case(id)))
+                                        .map(|v| v as VertexID)
+                                        .ok_or(id)
+                                    );
+
+                                if let Some(first) = target_iter.next() {
+                                    match first {
+                                        Ok(start) => {
+                                            let mut target_iter = target_iter.filter_map(|v| {
+                                                v.inspect(|v| write_cout!(@reply: console, Info, "adding vertex {v} to targets"))
+                                                 .inspect_err(|id| write_cout!(@reply: console, Warning, "vertex \"{id}\" does not exist, skipping"))
+                                                 .ok()
+                                            }).peekable();
+                                            if target_iter.peek().is_some() {
+                                                route = Some(RouteGenerator::new(&graph, start, target_iter));
+                                                write_cout!(@reply: console, Info, "generating route");
+                                            } else {
+                                                write_cout!(@reply: console, Error, "no targets provided");
+                                            }
+                                        }
+                                        Err(start) => {
+                                            write_cout!(@reply: console, Error, "vertex \"{start}\" does not exist");
                                         }
                                     }
-                                    Err(start) => {
-                                        write_cout!(@reply: console, Error, "vertex \"{start}\" does not exist");
+                                } else {
+                                    write_cout!(@reply: console, Error, "usage: {CMD_SV_ROUTE} <START> <TARGETS>...");
+                                }
+                            }
+
+                            CMD_SV_ROUTE_ADD => {
+                                todo!()
+                            }
+
+                            CMD_SV_M_ => {
+                                if let Some(id) = args.next() {
+                                    let mut alias = args.next();
+                                    let coords = args.next().or_else(|| alias.take());
+                                    if let Some(coords) = coords {
+                                        match parse_coords(coords) {
+                                            Ok(pos) => {
+                                                graph.add_vertex_auto(id, alias.unwrap_or(id), pos);
+                                                route = None;
+                                                write_cout!(@reply: console, Info, "created new vertex")
+                                            }
+                                            Err(e) => write_cout!(@reply: console, Error, "could not parse coordinates: {e}"),
+                                        }
+                                    } else {
+                                        write_cout!(@reply: console, Error, "usage: {CMD_SV_M_} <ID> [ALIAS] x:<???>/y:<???>");
                                     }
+                                } else {
+                                    write_cout!(@reply: console, Error, "usage: {CMD_SV_M_} <ID> [ALIAS] x:<???>/y:<???>");
                                 }
-                            } else {
-                                write_cout!(@reply: console, Error, "usage: {CMD_SV_ROUTE} <START> <TARGETS>...");
                             }
-                        }
 
-                        CMD_SV_ROUTE_ADD => {
-                            todo!()
-                        }
-
-                        CMD_TEMPO => {
-                            let ticks = args.next();
-                            let ms = args.next();
-                            if let (Some(ticks), Some(ms)) = (ticks, ms) {
-                                match ticks.parse() {
-                                    Ok(ticks) => tempo_ticks = ticks,
-                                    Err(e) => write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"),
+                            CMD_TEMPO => {
+                                if let Some((ticks, ms)) = args.next().and_then(|arg| arg.split_once('/')) {
+                                    match ticks.parse() {
+                                        Ok(ticks) => tempo_ticks = ticks,
+                                        Err(e) => write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"),
+                                    }
+                                    match ms.parse() {
+                                        Ok(ms) => tempo_ms = ms,
+                                        Err(e) => write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"),
+                                    }
+                                    write_cout!(@reply: console, Info, "set tempo to {ticks} steps every {ms}ms");
+                                } else {
+                                    write_cout!(@reply: console, Error, "usage: {CMD_TEMPO} <TICKS> <MILLISECONDS>");
                                 }
-                                match ms.parse() {
-                                    Ok(ms) => tempo_ms = ms,
-                                    Err(e) => write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"),
-                                }
-                            } else {
-                                write_cout!(@reply: console, Error, "usage: tempo <ticks per> <milliseconds>");
                             }
-                        }
 
-                        CMD_DBG => {
-                            is_debugging = !is_debugging;
-                            write_cout!(@reply: console, Info, "debugging is now {}", if is_debugging { "on" } else { "off" });
-                        }
+                            CMD_DBG => {
+                                is_debugging = !is_debugging;
+                                write_cout!(@reply: console, Info, "debugging is now {}", if is_debugging { "on" } else { "off" });
+                            }
 
-                        "" => {}
+                            CMD_CAM_FOCUS => {
+                                if let Some(target) = args.next() {
+                                    if target == "reset" {
+                                        camera.position = Vector3::new(0.0, 820.0, 0.0);
+                                        camera.target = Vector3::zero();
+                                    } else {
+                                        let vert = graph.verts.iter()
+                                            .find(|vert| (vert.id.eq_ignore_ascii_case(target) || vert.alias.eq_ignore_ascii_case(target)));
 
-                        _ => {
-                            write_cout!(@reply: console, Error, "no such command: `{cmd}`");
+                                        if let Some(vert) = vert {
+                                            camera.target = vert.pos;
+                                            camera.position = camera.target + Vector3::new(0.0, 400.0, 0.0);
+                                        } else {
+                                            write_cout!(@reply: console, Error, "vertex \"{target}\" does not exist");
+                                        }
+                                    }
+                                } else {
+                                    write_cout!(@reply: console, Error, "usage: {CMD_CAM_FOCUS} <TARGET>\
+                                                                       \n       {CMD_CAM_FOCUS} reset");
+                                }
+                            }
+
+                            "sv.cheats" => {
+                                write_cout!(@reply: console, Info, "cheats enabled"); // lol
+                            }
+
+                            _ => {
+                                write_cout!(@reply: console, Error, "no such command: `{cmd}`");
+                            }
                         }
                     }
                 }
@@ -644,6 +735,12 @@ fn main() {
                 console.command.push(ch);
             } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
                 console.command.pop();
+            } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
+                console.command = command_history.get(command_history_offset as usize).cloned().unwrap_or_default();
+                command_history_offset = (command_history_offset + 1).min(command_history.len() as isize);
+            } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
+                command_history_offset = (command_history_offset - 1).max(-1);
+                console.command = command_history.get(command_history_offset as usize).cloned().unwrap_or_default();
             }
         } else {
             let speed = 4.0*camera.position.distance_to(camera.target)/1000.0;
@@ -659,8 +756,10 @@ fn main() {
 
             if rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
                 if !is_paused && rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) { // sprint
-                    while !route.is_finished {
-                        route.step(&mut console);
+                    if let Some(ref mut route) = route {
+                        while !route.is_finished {
+                            route.step(&mut console);
+                        }
                     }
                 } else {
                     is_paused = !is_paused;
@@ -668,18 +767,24 @@ fn main() {
             }
         }
 
-        if !is_paused && !route.is_finished {
-            if let Some(tempo_ms) = std::num::NonZeroU128::new(tempo_ms) {
-                let ticks = last_route_step.elapsed().as_millis()/tempo_ms;
-                if ticks > 0 {
-                    for _ in 0..ticks*tempo_ticks {
-                        route.step(&mut console);
+        if !is_paused {
+            if let Some(ref mut route) = route {
+                if !route.is_finished {
+                    if let Some(tempo_ms) = std::num::NonZeroU128::new(tempo_ms) {
+                        let ticks = last_route_step.elapsed().as_millis()/tempo_ms;
+                        if ticks > 0 {
+                            for _ in 0..ticks*tempo_ticks {
+                                if route.is_finished { break; }
+                                route.step(&mut console);
+                            }
+                            last_route_step = Instant::now();
+                        }
+                    } else {
+                        for _ in 0..tempo_ticks {
+                            if route.is_finished { break; }
+                            route.step(&mut console);
+                        }
                     }
-                    last_route_step = Instant::now();
-                }
-            } else {
-                for _ in 0..tempo_ticks {
-                    route.step(&mut console);
                 }
             }
         }
@@ -702,37 +807,42 @@ fn main() {
             for (v, vert) in graph.verts_iter() {
                 let distance_from_target = vert.pos - camera.target;
                 let color = loop {
-                    if let Phase::Edge { current, i } = &route.phase {
-                        if &v == current {
-                            break Color::SKYBLUE;
-                        } else if graph.adjacent[*current as usize].get(*i).is_some_and(|x| &v == &x.vertex) {
-                            break Color::ORANGE;
+                    if let Some(route) = &route {
+                        if let Phase::Edge { current, i } = &route.phase {
+                            if &v == current {
+                                break Color::SKYBLUE;
+                            } else if graph.adjacent[*current as usize].get(*i).is_some_and(|x| &v == &x.vertex) {
+                                break Color::ORANGE;
+                            }
+                        }
+                        if !route.is_finished && v == route.root {
+                            break Color::BLUE;
+                        } else if route.result.contains(&v) {
+                            break Color::BLUEVIOLET;
+                        } else if route.targets.contains(&v) {
+                            break Color::GREEN;
                         }
                     }
-                    if !route.is_finished && v == route.root {
-                        break Color::BLUE;
-                    } else if route.result.contains(&v) {
-                        break Color::BLUEVIOLET;
-                    } else if route.targets.contains(&v) {
-                        break Color::GREEN;
+                    let dist_sqr = distance_from_target.dot(distance_from_target);
+                    if dist_sqr <= 8.0*8.0 {
+                        break Color::new(255, 128, 128, 255);
                     } else {
-                        let dist_sqr = distance_from_target.dot(distance_from_target);
-                        if dist_sqr <= 8.0*8.0 {
-                            break Color::new(255, 128, 128, 255);
-                        } else {
-                            break Color::RED;
-                        }
+                        break Color::RED;
                     }
                 };
                 d.draw_sphere(vert.pos, 8.0, color);
-                if let Some(Visit { parent: Some(p), .. }) = route.visited[v as usize] {
-                    d.draw_capsule(graph.verts[p as usize].pos, vert.pos, 1.0, 16, 0, Color::BLUE);
+                if let Some(route) = &route {
+                    if let Some(Visit { parent: Some(p), .. }) = route.visited[v as usize] {
+                        d.draw_capsule(graph.verts[p as usize].pos, vert.pos, 1.0, 16, 0, Color::BLUE);
+                    }
                 }
             }
 
-            for pair in route.result.windows(2) {
-                let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
-                d.draw_capsule(graph.verts[*a as usize].pos, graph.verts[*b as usize].pos, 2.0, 16, 0, Color::BLUEVIOLET);
+            if let Some(route) = &route {
+                for pair in route.result.windows(2) {
+                    let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
+                    d.draw_capsule(graph.verts[*a as usize].pos, graph.verts[*b as usize].pos, 2.0, 16, 0, Color::BLUEVIOLET);
+                }
             }
 
             d.draw_capsule(camera.target + Vector3::new(-5.0, 0.0,  0.0), camera.target + Vector3::new(5.0, 0.0, 0.0), 1.0, 16, 0, Color::BLUEVIOLET);
@@ -747,10 +857,12 @@ fn main() {
                 unsafe { ffi::MeasureTextEx(*font.as_ref(), c_text.as_ptr(), font.baseSize as f32, 0.0) }
             };
             d.draw_text_ex(&font, text, pos - rvec2(text_size.x*0.5, font.baseSize/2), font.baseSize as f32, 0.0, Color::WHITE);
-            if let Some(Visit { distance, parent }) = route.visited[v as usize] {
-                let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].alias);
-                let text = format!("{} ({parent_text})", distance.ceil());
-                d.draw_text_ex(&font, &text, pos + rvec2(text_size.x*0.5 + 3.0, 3), font.baseSize as f32, 0.0, Color::GRAY);
+            if let Some(route) = &route {
+                if let Some(Visit { distance, parent }) = route.visited[v as usize] {
+                    let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].alias);
+                    let text = format!("{} ({parent_text})", distance.ceil());
+                    d.draw_text_ex(&font, &text, pos + rvec2(text_size.x*0.5 + 3.0, 3), font.baseSize as f32, 0.0, Color::GRAY);
+                }
             }
         }
 
@@ -761,15 +873,25 @@ fn main() {
         //     .collect::<Vec<&str>>()
         //     .join(" - ");
 
-        if !is_giving_command {
+        // if !is_giving_command {
             // let target_text = route.targets.iter()
             //     .map(|&v| graph.verts[v as usize].id.as_str())
             //     .collect::<Vec<&str>>()
             //     .join(", ");
             // console.target = Some(target_text);
+        // }
 
-            d.draw_text_ex(&font, &format!("x:{}/y:{}", camera.target.x, camera.target.z), rvec2(0, d.get_render_height() - font.baseSize), font.baseSize as f32, 0.0, Color::GREENYELLOW);
+        if !is_giving_command {
+            d.draw_text_ex(&font,
+                "use WASD to pan and RFZX to orbit",
+                rvec2(0, d.get_render_height() - font.baseSize*3), font.baseSize as f32, 0.0, Color::GREENYELLOW);
         }
+
+        d.draw_text_ex(&font,
+            &format!("press ENTER to {} command", if is_giving_command { "finish the" } else { "begin typing a" }),
+            rvec2(0, d.get_render_height() - font.baseSize*2), font.baseSize as f32, 0.0, Color::GREENYELLOW);
+
+        d.draw_text_ex(&font, &format!("x:{}/y:{}", camera.target.x, camera.target.z), rvec2(0, d.get_render_height() - font.baseSize), font.baseSize as f32, 0.0, Color::GREENYELLOW);
 
         let mut n = 0;
         for item in console.iter() {
