@@ -566,7 +566,7 @@ fn main() {
     let mut is_paused = false;
     let mut was_paused = false; // paused before giving command
 
-    let mut camera = Camera3D::perspective(Vector3::new(0.0, 820.0, 0.0), Vector3::zero(), Vector3::new(0.0, 0.0, -1.0), 70.0);
+    let mut camera = Camera3D::perspective(Vector3::new(0.0, 1300.0, 0.0), Vector3::zero(), Vector3::new(0.0, 0.0, -1.0), 45.0);
 
     let mut is_giving_command = false;
     let mut command_history = VecDeque::new();
@@ -711,7 +711,7 @@ fn main() {
                             CMD_CAM_FOCUS => {
                                 if let Some(target) = args.next() {
                                     if target == "reset" {
-                                        camera.position = Vector3::new(0.0, 820.0, 0.0);
+                                        camera.position = Vector3::new(0.0, 1300.0, 0.0);
                                         camera.target = Vector3::zero();
                                     } else {
                                         let vert = graph.verts.iter()
@@ -762,7 +762,7 @@ fn main() {
                 console.command = command_history.get(command_history_offset as usize).cloned().unwrap_or_default();
             }
         } else {
-            let speed = 4.0*camera.position.distance_to(camera.target)/1000.0;
+            let speed = 4.0*camera.position.distance_to(camera.target)/1300.0;
             let north = (rl.is_key_down(KeyboardKey::KEY_W) as i8 - rl.is_key_down(KeyboardKey::KEY_S) as i8) as f32*speed;
             let east  = (rl.is_key_down(KeyboardKey::KEY_D) as i8 - rl.is_key_down(KeyboardKey::KEY_A) as i8) as f32*speed;
             let up    = (rl.is_key_down(KeyboardKey::KEY_Q) as i8 - rl.is_key_down(KeyboardKey::KEY_E) as i8) as f32*speed;
@@ -814,13 +814,19 @@ fn main() {
         d.clear_background(Color::new(8, 0, 0, 255));
 
         {
-            let mut d = d.begin_mode3D(camera);
+            const SCALE_FACTOR: f32 = 1.0/10.0;
+            let mut d = d.begin_mode3D({
+                let mut camera = camera;
+                camera.target *= SCALE_FACTOR;
+                camera.position *= SCALE_FACTOR;
+                camera
+            });
 
             for edge in &graph.edges {
                 let [i, j] = edge.adj.map(usize::from);
                 let p0 = graph.verts[i].pos;
                 let p1 = graph.verts[j].pos;
-                d.draw_capsule(p0, p1, 1.0, 16, 0, Color::RED.alpha(0.25));
+                d.draw_capsule(p0*SCALE_FACTOR, p1*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::RED.alpha(0.25));
             }
 
             for (v, vert) in graph.verts_iter() {
@@ -850,10 +856,10 @@ fn main() {
                     }
                 };
                 let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
-                d.draw_sphere_ex(vert.pos, VERTEX_RADIUS, resolution, resolution, color);
+                d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, resolution, resolution, color);
                 if let Some(route) = &route {
                     if let Some(Visit { parent: Some(p), .. }) = route.visited[v as usize] {
-                        d.draw_capsule(graph.verts[p as usize].pos, vert.pos, 1.0, 16, 0, Color::BLUE);
+                        d.draw_capsule(graph.verts[p as usize].pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
                     }
                 }
             }
@@ -861,12 +867,12 @@ fn main() {
             if let Some(route) = &route {
                 for pair in route.result.windows(2) {
                     let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
-                    d.draw_capsule(graph.verts[*a as usize].pos, graph.verts[*b as usize].pos, 2.0, 16, 0, Color::BLUEVIOLET);
+                    d.draw_capsule(graph.verts[*a as usize].pos*SCALE_FACTOR, graph.verts[*b as usize].pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
                 }
             }
 
-            d.draw_capsule(camera.target + Vector3::new(-5.0, 0.0,  0.0), camera.target + Vector3::new(5.0, 0.0, 0.0), 1.0, 16, 0, Color::BLUEVIOLET);
-            d.draw_capsule(camera.target + Vector3::new( 0.0, 0.0, -5.0), camera.target + Vector3::new(0.0, 0.0, 5.0), 1.0, 16, 0, Color::BLUEVIOLET);
+            d.draw_capsule((camera.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (camera.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+            d.draw_capsule((camera.target + Vector3::new( 0.0, 0.0, -5.0))*SCALE_FACTOR, (camera.target + Vector3::new(0.0, 0.0, 5.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
         }
 
         for (v, vert) in graph.verts_iter() {
