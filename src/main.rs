@@ -699,7 +699,7 @@ fn main() {
                                         write_cout!(@reply: console, Error, "usage: {CMD_TEMPO} <TICKS>/<MILLISECONDS>");
                                     }
                                 } else {
-                                    write_cout!(@reply: console, Error, "usage: {CMD_TEMPO} <TICKS>/<MILLISECONDS>");
+                                    write_cout!(@reply: console, Info, "current tempo is {tempo_ticks} steps every {tempo_ms}ms");
                                 }
                             }
 
@@ -922,7 +922,7 @@ fn main() {
                 ConsoleLineCategory::Trace                 => (Color::DARKGRAY,  "trace: ", ""),
                 ConsoleLineCategory::Debug if is_debugging => (Color::MAGENTA,   "debug: ", ""),
                 ConsoleLineCategory::Debug                 => continue,
-                ConsoleLineCategory::Info                  => (Color::LIGHTGRAY, "<", ""),
+                ConsoleLineCategory::Info                  => (Color::LIGHTGRAY, "", ""),
                 ConsoleLineCategory::Warning               => (Color::GOLD,      "warning: ", ""),
                 ConsoleLineCategory::Error                 => (Color::RED,       "err: ", ""),
                 ConsoleLineCategory::Fatal                 => (Color::SALMON,    "fatal: ", ""),
