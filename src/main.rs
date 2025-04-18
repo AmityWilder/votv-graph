@@ -287,6 +287,7 @@ impl<'a> RouteGenerator<'a> {
 
             Phase::Edge { current, i } => {
                 if let Some(&Adjacent { vertex, weight }) = self.graph.adjacent[*current as usize].get(*i) {
+                    write_cout!(console, Info, 2, "looking at vertex {current} ({i}/{})", self.graph.adjacent[*current as usize].len());
                     if self.visited[vertex as usize].is_none() {
                         self.queue.push_back(vertex);
                         write_cout!(console, Info, 3, "pushed vertex {vertex} to queue");
@@ -308,7 +309,6 @@ impl<'a> RouteGenerator<'a> {
                     if let Some(next_vert) = self.queue.pop_front() {
                         *current = next_vert;
                         *i = 0;
-                        write_cout!(console, Info, 2, "looking at vertex {current}");
                     } else {
                         self.begin_phase_target(console);
                     }
@@ -425,6 +425,8 @@ pub fn parse_coords(coords: &str) -> Result<Vector3, ParseCoordsError> {
 }
 
 fn main() {
+    const VERTEX_RADIUS: f32 = 8.0;
+
     let (mut rl, thread) = init()
         .size(640, 640)
         .title("Traversal")
@@ -442,32 +444,32 @@ fn main() {
     define_verts!{
         verts:
         // Satellites
-        Alpha    (A) = (     0.0,   0.0,      0.0);
-        Bravo    (B) = (-  100.0,   0.0, -  200.0);
-        Charlie  (C) = (     0.0,   0.0, -  200.0);
-        Delta    (D) = (   100.0,   0.0, -  200.0);
-        Echo     (E) = (   200.0,   0.0, -  100.0);
-        Foxtrot  (F) = (   200.0,   0.0,      0.0);
-        Golf     (G) = (   200.0,   0.0,    100.0);
-        Hotel    (H) = (   100.0,   0.0,    200.0);
-        India    (I) = (     0.0,   0.0,    200.0);
-        Juliett  (J) = (-  100.0,   0.0,    200.0);
-        Kilo     (K) = (-  200.0,   0.0,    100.0);
-        Lima     (L) = (-  200.0,   0.0,      0.0);
-        Mike     (M) = (-  200.0,   0.0, -  100.0);
-        November (N) = (-  300.0,   0.0, -  300.0);
-        Oscar    (O) = (   300.0,   0.0, -  300.0);
-        Papa     (P) = (   300.0,   0.0,    300.0);
-        Quebec   (Q) = (-  300.0,   0.0,    300.0);
-        Romeo    (R) = (-  500.0,  20.0, -  500.0);
-        Sierra   (S) = (     0.0,  20.0, -  500.0);
-        Tango    (T) = (   500.0,  20.0, -  500.0);
-        Uniform  (U) = (   500.0,  20.0,      0.0);
-        Victor   (V) = (   500.0,  20.0,    500.0);
-        Whiskey  (W) = (     0.0,  20.0,    500.0);
-        Xray     (X) = (-  500.0,  20.0,    500.0);
-        Yankee   (Y) = (-  500.0,  20.0,      0.0);
-        Zulu     (Z) = ( 10000.0,   0.0,  10000.0);
+        Alpha    (A) = (     0.0, 0.0,      0.0);
+        Bravo    (B) = (-  100.0, 0.0, -  200.0);
+        Charlie  (C) = (     0.0, 0.0, -  200.0);
+        Delta    (D) = (   100.0, 0.0, -  200.0);
+        Echo     (E) = (   200.0, 0.0, -  100.0);
+        Foxtrot  (F) = (   200.0, 0.0,      0.0);
+        Golf     (G) = (   200.0, 0.0,    100.0);
+        Hotel    (H) = (   100.0, 0.0,    200.0);
+        India    (I) = (     0.0, 0.0,    200.0);
+        Juliett  (J) = (-  100.0, 0.0,    200.0);
+        Kilo     (K) = (-  200.0, 0.0,    100.0);
+        Lima     (L) = (-  200.0, 0.0,      0.0);
+        Mike     (M) = (-  200.0, 0.0, -  100.0);
+        November (N) = (-  300.0, 0.0, -  300.0);
+        Oscar    (O) = (   300.0, 0.0, -  300.0);
+        Papa     (P) = (   300.0, 0.0,    300.0);
+        Quebec   (Q) = (-  300.0, 0.0,    300.0);
+        Romeo    (R) = (-  500.0, 0.0, -  500.0);
+        Sierra   (S) = (     0.0, 0.0, -  500.0);
+        Tango    (T) = (   500.0, 0.0, -  500.0);
+        Uniform  (U) = (   500.0, 0.0,      0.0);
+        Victor   (V) = (   500.0, 0.0,    500.0);
+        Whiskey  (W) = (     0.0, 0.0,    500.0);
+        Xray     (X) = (-  500.0, 0.0,    500.0);
+        Yankee   (Y) = (-  500.0, 0.0,      0.0);
+        Zulu     (Z) = ( 10000.0, 0.0,  10000.0);
 
         // Transformers
         TR_1 (TR1) = ( 400.0, 0.0,  200.0); // Transformer 1
@@ -610,10 +612,13 @@ fn main() {
                                     \n  {CMD_SV_ROUTE} <START> <TARGETS>...          generate the shortest route visiting each target (separated by spaces)\
                                     \n  {CMD_SV_ROUTE_ADD} <TARGETS>...              add more targets (separated by spaces) to the current route\
                                     \n  {CMD_SV_M_} <ID> [ALIAS] x:<???>/y:<???>...  create a new vertex that can be targeted\
-                                    \n  {CMD_TEMPO} <TICKS> <MILLISECONDS>           set the route tick speed in ticks per milliseconds\
+                                    \n  {CMD_TEMPO} <TICKS>/<MILLISECONDS>           set the route tick speed in ticks per milliseconds\
+                                    \n  {CMD_TEMPO} reset                            set the route tick speed to the default (1 step per frame)\
+                                    \n  {CMD_TEMPO}                                  print the current tempo\
                                     \n  {CMD_DBG}                                    toggle route debug messages\
                                     \n  {CMD_CAM_FOCUS} <TARGET>                     zoom in on a particular target\
                                     \n  {CMD_CAM_FOCUS} reset                        reset camera orientation\
+                                    \n  {CMD_CAM_FOCUS}                              print the name of the focused vertex\
                                 ");
                             }
 
@@ -675,18 +680,26 @@ fn main() {
                             }
 
                             CMD_TEMPO => {
-                                if let Some((ticks, ms)) = args.next().and_then(|arg| arg.split_once('/')) {
-                                    match ticks.parse() {
-                                        Ok(ticks) => tempo_ticks = ticks,
-                                        Err(e) => write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"),
+                                if let Some(arg) = args.next() {
+                                    if arg == "reset" {
+                                        tempo_ticks = 1;
+                                        tempo_ms = 16;
+                                        write_cout!(@reply: console, Info, "set tempo to {tempo_ticks} steps every {tempo_ms}ms");
+                                    } else if let Some((ticks, ms)) = arg.split_once('/') {
+                                        match ticks.parse() {
+                                            Ok(ticks) => tempo_ticks = ticks,
+                                            Err(e) => write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"),
+                                        }
+                                        match ms.parse() {
+                                            Ok(ms) => tempo_ms = ms,
+                                            Err(e) => write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"),
+                                        }
+                                        write_cout!(@reply: console, Info, "set tempo to {ticks} steps every {ms}ms");
+                                    } else {
+                                        write_cout!(@reply: console, Error, "usage: {CMD_TEMPO} <TICKS>/<MILLISECONDS>");
                                     }
-                                    match ms.parse() {
-                                        Ok(ms) => tempo_ms = ms,
-                                        Err(e) => write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"),
-                                    }
-                                    write_cout!(@reply: console, Info, "set tempo to {ticks} steps every {ms}ms");
                                 } else {
-                                    write_cout!(@reply: console, Error, "usage: {CMD_TEMPO} <TICKS> <MILLISECONDS>");
+                                    write_cout!(@reply: console, Error, "usage: {CMD_TEMPO} <TICKS>/<MILLISECONDS>");
                                 }
                             }
 
@@ -712,8 +725,14 @@ fn main() {
                                         }
                                     }
                                 } else {
-                                    write_cout!(@reply: console, Error, "usage: {CMD_CAM_FOCUS} <TARGET>\
-                                                                       \n       {CMD_CAM_FOCUS} reset");
+                                    let vert = graph.verts.iter()
+                                        .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, camera.target, 1.0));
+
+                                    if let Some(target) = vert {
+                                        write_cout!(@reply: console, Info, "currently focusing vertex {}", target.id);
+                                    } else {
+                                        write_cout!(@reply: console, Info, "no vertex is currently focused");
+                                    }
                                 }
                             }
 
@@ -792,7 +811,7 @@ fn main() {
         let route = &route;
 
         let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::BLACK);
+        d.clear_background(Color::new(8, 0, 0, 255));
 
         {
             let mut d = d.begin_mode3D(camera);
@@ -824,13 +843,14 @@ fn main() {
                         }
                     }
                     let dist_sqr = distance_from_target.dot(distance_from_target);
-                    if dist_sqr <= 8.0*8.0 {
+                    if dist_sqr <= VERTEX_RADIUS*VERTEX_RADIUS {
                         break Color::new(255, 128, 128, 255);
                     } else {
                         break Color::RED;
                     }
                 };
-                d.draw_sphere(vert.pos, 8.0, color);
+                let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
+                d.draw_sphere_ex(vert.pos, VERTEX_RADIUS, resolution, resolution, color);
                 if let Some(route) = &route {
                     if let Some(Visit { parent: Some(p), .. }) = route.visited[v as usize] {
                         d.draw_capsule(graph.verts[p as usize].pos, vert.pos, 1.0, 16, 0, Color::BLUE);
