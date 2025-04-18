@@ -56,7 +56,7 @@ impl<'a> ConsoleLineRef<'a> {
 pub struct Console {
     pub route: String,
     pub command: String,
-    pub reply: Option<ConsoleLine>,
+    pub reply: Vec<ConsoleLine>,
     pub target: Option<String>,
     pub debug: Vec<ConsoleLine>,
 }
@@ -66,7 +66,7 @@ impl Console {
         Self {
             route: String::new(),
             command: String::new(),
-            reply: None,
+            reply: Vec::new(),
             target: None,
             debug: Vec::new(),
         }
@@ -76,13 +76,13 @@ impl Console {
         None.into_iter()
             .chain(std::iter::once_with(|| ConsoleLineRef::command(&self.command)))
             .chain(self.reply.iter().map(|item| item.as_line_ref()))
-            .chain(std::iter::once(ConsoleLineRef::route(&self.route)))
+            // .chain(std::iter::once(ConsoleLineRef::route(&self.route)))
             // .chain(self.target.iter().map(|msg| ConsoleLineRef::target_list(msg)))
             .chain(self.debug.iter().map(|item| item.as_line_ref()))
     }
 
     pub fn reply(&mut self, cat: ConsoleLineCategory, msg: std::fmt::Arguments<'_>) {
-        self.reply = Some(ConsoleLine { cat, msg: msg.to_string() });
+        self.reply.push(ConsoleLine { cat, msg: msg.to_string() });
     }
 
     pub fn debug(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
@@ -228,10 +228,6 @@ impl<'a> RouteGenerator<'a> {
         }
     }
 
-    fn _begin_phase_none(&mut self, _console: &mut Console) {
-        todo!()
-    }
-
     fn begin_phase_edge(&mut self, console: &mut Console) {
         write_cout!(console, Info, 1, "edge phase");
         write_cout!(console, Info, 2, "looking at vertex {}", self.root);
@@ -264,7 +260,6 @@ impl<'a> RouteGenerator<'a> {
     }
 
     pub fn step(&mut self, console: &mut Console) {
-        if self.is_finished { return; }
         debug_assert!(!self.is_finished, "do not continue finished route");
         match &mut self.phase {
             Phase::None => {
@@ -332,7 +327,12 @@ impl<'a> RouteGenerator<'a> {
                 } else {
                     write_cout!(console, Info, 2, "adding vertex {} to results", self.root);
                     if self.targets.is_empty() {
-                        write_cout!(console, Info, 0, "final route: {:?}", self.result);
+                        let final_route = self.result.iter()
+                            .map(|&v| self.graph.verts[v as usize].id.as_str())
+                            .collect::<Vec<&str>>()
+                            .join(" - ");
+                        console.reply.clear();
+                        write_cout!(console, Route, 0, "{final_route}");
                         self.is_finished = true;
                         let mut distance = 0.0;
                         self.visited[self.result[0] as usize] = Some(Visit { distance, parent: None });
@@ -387,10 +387,8 @@ macro_rules! define_edges {
 }
 
 fn main() {
-    let window_width = 640;
-    let window_height = 640;
     let (mut rl, thread) = init()
-        .size(window_width, window_height)
+        .size(640, 640)
         .title("Traversal")
         .resizable()
         .msaa_4x()
@@ -548,7 +546,7 @@ fn main() {
                 is_paused = true;
 
                 console.command.clear();
-                console.reply = None;
+                console.reply.clear();
             } else {
                 // finish giving command
                 is_paused = was_paused;
@@ -574,32 +572,34 @@ fn main() {
                         }
 
                         CMD_SV_ROUTE => {
-                            let mut targets = Vec::new();
-                            for id in args {
-                                let v = graph.verts_iter()
+                            let mut target_iter = args.map(|id|
+                                graph.verts_iter()
                                     .position(|(_, vert)| (vert.id.eq_ignore_ascii_case(id) || vert.alias.eq_ignore_ascii_case(id)))
-                                    .map(|v| v as VertexID);
-                                if let Some(v) = v {
-                                    if targets.contains(&v) {
-                                        write_cout!(@reply: console, Warning, "vertex {v} is already a target");
-                                    } else {
-                                        write_cout!(@reply: console, Info, "adding vertex {v} to targets");
-                                        targets.push(v);
+                                    .map(|v| v as VertexID)
+                                    .ok_or(id)
+                                );
+
+                            if let Some(first) = target_iter.next() {
+                                match first {
+                                    Ok(start) => {
+                                        let mut target_iter = target_iter.filter_map(|v| {
+                                            v.inspect(|v| write_cout!(@reply: console, Info, "adding vertex {v} to targets"))
+                                             .inspect_err(|id| write_cout!(@reply: console, Warning, "vertex \"{id}\" does not exist, skipping"))
+                                             .ok()
+                                        }).peekable();
+                                        if target_iter.peek().is_some() {
+                                            route = RouteGenerator::new(&graph, start, target_iter);
+                                            write_cout!(@reply: console, Info, "generating route");
+                                        } else {
+                                            write_cout!(@reply: console, Error, "no targets provided");
+                                        }
                                     }
-                                } else {
-                                    write_cout!(@reply: console, Warning, "no vertex id {id}");
-                                }
-                            }
-                            let mut iter = targets.into_iter();
-                            if let Some(first) = iter.next() {
-                                if iter.len() != 0 {
-                                    route = RouteGenerator::new(&graph, first, iter);
-                                    write_cout!(@reply: console, Info, "generating route");
-                                } else {
-                                    write_cout!(@reply: console, Warning, "no targets provided");
+                                    Err(start) => {
+                                        write_cout!(@reply: console, Error, "vertex \"{start}\" does not exist");
+                                    }
                                 }
                             } else {
-                                write_cout!(@reply: console, Warning, "no start point provided");
+                                write_cout!(@reply: console, Error, "usage: {CMD_SV_ROUTE} <START> <TARGETS>...");
                             }
                         }
 
@@ -756,17 +756,19 @@ fn main() {
 
         // Console
 
-        console.route = route.result.iter()
-            .map(|&v| graph.verts[v as usize].id.as_str())
-            .collect::<Vec<&str>>()
-            .join(" - ");
+        // console.route = route.result.iter()
+        //     .map(|&v| graph.verts[v as usize].id.as_str())
+        //     .collect::<Vec<&str>>()
+        //     .join(" - ");
 
         if !is_giving_command {
-            let target_text = route.targets.iter()
-                .map(|&v| graph.verts[v as usize].id.as_str())
-                .collect::<Vec<&str>>()
-                .join(", ");
-            console.target = Some(target_text);
+            // let target_text = route.targets.iter()
+            //     .map(|&v| graph.verts[v as usize].id.as_str())
+            //     .collect::<Vec<&str>>()
+            //     .join(", ");
+            // console.target = Some(target_text);
+
+            d.draw_text_ex(&font, &format!("x:{}/y:{}", camera.target.x, camera.target.z), rvec2(0, d.get_render_height() - font.baseSize), font.baseSize as f32, 0.0, Color::GREENYELLOW);
         }
 
         let mut n = 0;
@@ -788,8 +790,5 @@ fn main() {
                 n += 1;
             }
         }
-        // d.draw_text_ex(&font, " !\"#$%\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~", rvec2(0, window_height - font.baseSize*3), font.baseSize as f32, 0.0, Color::YELLOW);
-        // d.draw_text_ex(&font, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG", rvec2(0, window_height - font.baseSize*2), font.baseSize as f32, 0.0, Color::YELLOW);
-        // d.draw_text_ex(&font, "the quick brown fox jumps over the lazy dog", rvec2(0, window_height - font.baseSize), font.baseSize as f32, 0.0, Color::YELLOW);
     }
 }
