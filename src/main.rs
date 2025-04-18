@@ -6,10 +6,8 @@ use raylib::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsoleLineCategory {
     Route,
-
     Command,
     TargetList,
-
     Trace,
     Debug,
     Info,
@@ -26,10 +24,7 @@ pub struct ConsoleLine {
 
 impl ConsoleLine {
     pub fn as_line_ref(&self) -> ConsoleLineRef<'_> {
-        ConsoleLineRef {
-            cat: self.cat,
-            msg: Cow::Borrowed(&self.msg),
-        }
+        ConsoleLineRef::new(self.cat, &self.msg)
     }
 }
 
@@ -39,44 +34,67 @@ pub struct ConsoleLineRef<'a> {
     msg: Cow<'a, str>,
 }
 
+impl<'a> ConsoleLineRef<'a> {
+    pub fn new(cat: ConsoleLineCategory, msg: &'a str) -> Self {
+        Self {
+            cat,
+            msg: Cow::Borrowed(msg),
+        }
+    }
+
+    pub fn route(msg: &'a str) -> Self {
+        Self::new(ConsoleLineCategory::Route, msg)
+    }
+    pub fn command(msg: &'a str) -> Self {
+        Self::new(ConsoleLineCategory::Command, msg)
+    }
+    pub fn target_list(msg: &'a str) -> Self {
+        Self::new(ConsoleLineCategory::TargetList, msg)
+    }
+}
+
 pub struct Console {
-    pub route: ConsoleLine,
-    pub input: ConsoleLine,
-    pub route_debug: Vec<ConsoleLine>,
+    pub route: String,
+    pub command: String,
+    pub reply: Option<ConsoleLine>,
+    pub target: Option<String>,
+    pub debug: Vec<ConsoleLine>,
 }
 
 impl Console {
     pub const fn new() -> Self {
         Self {
-            route: ConsoleLine {
-                cat: ConsoleLineCategory::Route,
-                msg: String::new(),
-            },
-            input: ConsoleLine {
-                cat: ConsoleLineCategory::TargetList,
-                msg: String::new(),
-            },
-            route_debug: Vec::new(),
+            route: String::new(),
+            command: String::new(),
+            reply: None,
+            target: None,
+            debug: Vec::new(),
         }
     }
 
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = ConsoleLineRef<'_>> {
-        std::iter::once(self.route.as_line_ref())
-            .chain(std::iter::once(self.input.as_line_ref()))
-            .chain(self.route_debug.iter().map(|item| item.as_line_ref()))
+        std::iter::once(ConsoleLineRef::route(&self.route))
+            .chain(std::iter::once_with(|| ConsoleLineRef::command(&self.command)))
+            .chain(self.reply.iter().map(|item| item.as_line_ref()))
+            .chain(self.target.iter().map(|msg| ConsoleLineRef::target_list(msg)))
+            .chain(self.debug.iter().map(|item| item.as_line_ref()))
     }
 
-    pub fn write(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
-        while self.route_debug.len() > depth {
-            self.route_debug.pop();
+    pub fn reply(&mut self, cat: ConsoleLineCategory, msg: std::fmt::Arguments<'_>) {
+        self.reply = Some(ConsoleLine { cat, msg: msg.to_string() });
+    }
+
+    pub fn debug(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
+        while self.debug.len() > depth {
+            self.debug.pop();
         }
-        if self.route_debug.len() == depth {
-            self.route_debug.push(ConsoleLine { cat, msg: msg.to_string() });
+        if self.debug.len() == depth {
+            self.debug.push(ConsoleLine { cat, msg: msg.to_string() });
         } else {
             panic!("cannot push more than one depth (current depth: {}, write depth: {})\nconsole: {:?}\nwanted to print: \"{:?}\"",
-                self.route_debug.len() as isize - 1,
+                self.debug.len() as isize - 1,
                 depth,
-                &self.route_debug,
+                &self.debug,
                 msg,
             );
         }
@@ -84,8 +102,15 @@ impl Console {
 }
 
 macro_rules! write_cout {
-    ($dst:expr, $level:ident, $depth:expr, $($args:tt)+) => {
-        $dst.write(
+    (@reply: $cons:expr, $level:ident, $($args:tt)+) => {
+        $cons.reply(
+            ConsoleLineCategory::$level,
+            format_args!($($args)+),
+        )
+    };
+
+    ($cons:expr, $level:ident, $depth:expr, $($args:tt)+) => {
+        $cons.debug(
             ConsoleLineCategory::$level,
             $depth,
             format_args!($($args)+),
@@ -178,31 +203,31 @@ pub struct Adjacent {
 }
 
 pub struct RouteGenerator<'a> {
+    pub graph: &'a WeightedGraph,
     pub targets: Vec<VertexID>,
     pub result: Vec<VertexID>,
     pub root: VertexID,
     pub visited: Box<[Option<Visit>]>,
     pub queue: VecDeque<VertexID>,
     pub phase: Phase,
-    pub graph: &'a WeightedGraph,
     pub is_finished: bool,
 }
 
 impl<'a> RouteGenerator<'a> {
     pub fn new(graph: &'a WeightedGraph, start: VertexID, targets: impl IntoIterator<Item = VertexID>) -> Self {
         Self {
+            graph,
             targets: Vec::from_iter(targets),
             result: vec![start],
             root: start,
             visited: vec![const { None }; graph.verts.len()].into_boxed_slice(),
             queue: VecDeque::new(),
             phase: Phase::None,
-            graph,
             is_finished: false,
         }
     }
 
-    fn begin_phase_none(&mut self, _console: &mut Console) {
+    fn _begin_phase_none(&mut self, _console: &mut Console) {
         todo!()
     }
 
@@ -364,6 +389,9 @@ fn main() {
         .resizable()
         .build();
 
+    let img = Image::load_image_from_mem(".png", include_bytes!("resources/console.png")).unwrap();
+    let font = dbg!(rl.load_font_from_image(&thread, &img, Color::MAGENTA, ' ' as i32).unwrap());
+
     rl.set_target_fps(120);
 
     define_verts!{
@@ -494,6 +522,7 @@ fn main() {
 
     let mut is_giving_command = false;
     let mut console: Console = Console::new();
+    let mut is_debugging = false;
 
     let mut last_route_step = Instant::now();
     let mut tempo_ticks = 1;
@@ -507,53 +536,99 @@ fn main() {
                 was_paused = is_paused;
                 is_paused = true;
 
-                console.input.cat = ConsoleLineCategory::Command;
-                console.input.msg = String::new();
+                console.command.clear();
+                console.reply = None;
             } else {
                 // finish giving command
                 is_paused = was_paused;
 
-                let mut targets = Vec::new();
-                let command = std::mem::replace(&mut console.input.msg, String::new());
-                for id in command.split(' ') {
-                    let candidates: Vec<VertexID> = graph.verts_iter()
-                        .filter_map(|(v, vert)| (!vert.id.starts_with("Bridge") && (vert.id == id || vert.alias == id)).then_some(v))
-                        .collect();
-                    match candidates.as_slice() {
-                        &[] => {
-                            write_cout!(console, Error, 0, "no vertex id {id}");
+                let command = std::mem::take(&mut console.command);
+                let mut args = command.split(' ');
+                if let Some(cmd) = args.next() {
+                    const CMD_HELP: &str = "help";
+                    const CMD_SV_ROUTE: &str = "sv.route";
+                    const CMD_SV_ROUTE_ADD: &str = "sv.route.add";
+                    const CMD_TEMPO: &str = "tempo";
+                    const CMD_DBG: &str = "dbg";
+                    match cmd {
+                        CMD_HELP => {
+                            write_cout!(@reply: console, Info, "\
+                                commands:\
+                                \n  {CMD_HELP}                           display this information\
+                                \n  {CMD_SV_ROUTE} <START> <TARGETS>...  generate the shortest route visiting each target (separated by spaces)\
+                                \n  {CMD_SV_ROUTE_ADD} <TARGETS>...      add more targets (separated by spaces) to the current route\
+                                \n  {CMD_TEMPO} <TICKS> <MILLISECONDS>   set the route tick speed in ticks per milliseconds\
+                                \n  {CMD_DBG}                            toggle route debug messages\
+                            ");
                         }
-                        &[v] => {
-                            if targets.contains(&v) {
-                                write_cout!(console, Error, 0, "vertex {v} is already a target");
+
+                        CMD_SV_ROUTE => {
+                            let mut targets = Vec::new();
+                            for id in args {
+                                let v = graph.verts_iter()
+                                    .position(|(_, vert)| (!vert.id.starts_with("Bridge") && (vert.id == id || vert.alias == id)))
+                                    .map(|v| v as VertexID);
+                                if let Some(v) = v {
+                                    if targets.contains(&v) {
+                                        write_cout!(@reply: console, Warning, "vertex {v} is already a target");
+                                    } else {
+                                        write_cout!(@reply: console, Info, "adding vertex {v} to targets");
+                                        targets.push(v);
+                                    }
+                                } else {
+                                    write_cout!(@reply: console, Warning, "no vertex id {id}");
+                                }
+                            }
+                            let mut iter = targets.into_iter();
+                            if let Some(first) = iter.next() {
+                                if iter.len() != 0 {
+                                    route = RouteGenerator::new(&graph, first, iter);
+                                } else {
+                                    write_cout!(@reply: console, Warning, "no targets provided");
+                                }
                             } else {
-                                write_cout!(console, Info, 0, "adding vertex {v} to targets");
-                                targets.push(v);
+                                write_cout!(@reply: console, Warning, "no start point provided");
                             }
                         }
-                        &[..] => {
-                            write_cout!(console, Error, 0, "{} matches for \"{id}\" including {:?}", candidates.len(), &candidates);
+
+                        CMD_SV_ROUTE_ADD => {
+                            todo!()
+                        }
+
+                        CMD_TEMPO => {
+                            let ticks = args.next();
+                            let ms = args.next();
+                            if let (Some(ticks), Some(ms)) = (ticks, ms) {
+                                match ticks.parse() {
+                                    Ok(ticks) => tempo_ticks = ticks,
+                                    Err(e) => write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"),
+                                }
+                                match ms.parse() {
+                                    Ok(ms) => tempo_ms = ms,
+                                    Err(e) => write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"),
+                                }
+                            } else {
+                                write_cout!(@reply: console, Error, "usage: tempo <ticks per> <milliseconds>");
+                            }
+                        }
+
+                        CMD_DBG => {
+
+                        }
+
+                        _ => {
+                            write_cout!(@reply: console, Error, "no such command: `{cmd}`");
                         }
                     }
-                }
-                let mut iter = targets.into_iter();
-                if let Some(first) = iter.next() {
-                    if iter.len() != 0 {
-                        route = RouteGenerator::new(&graph, first, iter);
-                    } else {
-                        write_cout!(console, Warning, 0, "no targets provided");
-                    }
-                } else {
-                    write_cout!(console, Warning, 0, "no start point provided");
                 }
             }
         }
 
         if is_giving_command {
             if let Some(ch) = rl.get_char_pressed() {
-                console.input.msg.push(ch);
+                console.command.push(ch);
             } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
-                console.input.msg.pop();
+                console.command.pop();
             }
         } else {
             let speed = 4.0*camera.position.distance_to(camera.target)/1000.0;
@@ -652,17 +727,17 @@ fn main() {
         for (v, vert) in graph.verts_iter() {
             let pos = d.get_world_to_screen(vert.pos, camera);
             let text_width = d.measure_text(&vert.alias, 10);
-            d.draw_text(&vert.alias, pos.x as i32 - text_width/2, pos.y as i32 - 5, 10, Color::WHITE);
+            d.draw_text_ex(&font, &vert.alias, pos - rvec2(text_width/2, font.baseSize/2), font.baseSize as f32, 2.0, Color::WHITE);
             if let Some(Visit { distance, parent }) = route.visited[v as usize] {
                 let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].alias);
                 let text = format!("{} ({parent_text})", distance.ceil());
-                d.draw_text(&text, pos.x as i32 + text_width/2 + 3, pos.y as i32 + 3, 10, Color::GRAY);
+                d.draw_text_ex(&font, &text, pos + rvec2(text_width/2 + 3, 3), font.baseSize as f32, 2.0, Color::GRAY);
             }
         }
 
         // Console
 
-        console.route.msg = route.result.iter()
+        console.route = route.result.iter()
             .map(|&v| graph.verts[v as usize].id.as_str())
             .collect::<Vec<&str>>()
             .join(" - ");
@@ -672,25 +747,29 @@ fn main() {
                 .map(|&v| graph.verts[v as usize].id.as_str())
                 .collect::<Vec<&str>>()
                 .join(", ");
-            console.input = ConsoleLine {
-                cat: ConsoleLineCategory::TargetList,
-                msg: target_text,
-            }
+            console.target = Some(target_text);
         }
 
-        for (i, line) in console.iter().enumerate() {
-            let (color, prefix) = match line.cat {
-                ConsoleLineCategory::Route      => (Color::RAYWHITE,  "route: "),
-                ConsoleLineCategory::Command    => (Color::LIGHTBLUE, "> "),
+        let mut n = 0;
+        for item in console.iter() {
+            let (color, prefix) = match item.cat {
+                ConsoleLineCategory::Route      => (Color::RAYWHITE,  "route: "  ),
+                ConsoleLineCategory::Command    => (Color::LIGHTBLUE, ">"        ),
                 ConsoleLineCategory::TargetList => (Color::LIME,      "targets: "),
-                ConsoleLineCategory::Trace      => (Color::DARKGRAY,  "trace: "),
-                ConsoleLineCategory::Debug      => (Color::MAGENTA,   "debug: "),
-                ConsoleLineCategory::Info       => (Color::LIGHTGRAY, ""),
+                ConsoleLineCategory::Trace      => (Color::DARKGRAY,  "trace: "  ),
+                ConsoleLineCategory::Debug      => (Color::MAGENTA,   "debug: "  ),
+                ConsoleLineCategory::Info       => (Color::LIGHTGRAY, "<"        ),
                 ConsoleLineCategory::Warning    => (Color::GOLD,      "warning: "),
-                ConsoleLineCategory::Error      => (Color::RED,       "error: "),
-                ConsoleLineCategory::Fatal      => (Color::SALMON,    "fatal: "),
+                ConsoleLineCategory::Error      => (Color::RED,       "err "  ),
+                ConsoleLineCategory::Fatal      => (Color::SALMON,    "fatal: "  ),
             };
-            d.draw_text(&format!("{prefix}{}", line.msg), 0, 10*i as i32, 10, color);
+            for line in format!("{prefix}{}", item.msg).lines() {
+                d.draw_text_ex(&font, &line, rvec2(0, font.baseSize*n), font.baseSize as f32, 2.0, color);
+                n += 1;
+            }
         }
+        d.draw_text_ex(&font, " !\"#$%\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~", rvec2(0, window_height - font.baseSize*3), font.baseSize as f32, 2.0, Color::YELLOW);
+        d.draw_text_ex(&font, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG", rvec2(0, window_height - font.baseSize*2), font.baseSize as f32, 2.0, Color::YELLOW);
+        d.draw_text_ex(&font, "the quick brown fox jumps over the lazy dog", rvec2(0, window_height - font.baseSize), font.baseSize as f32, 2.0, Color::YELLOW);
     }
 }
