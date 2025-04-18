@@ -727,11 +727,11 @@ fn main() {
         for (v, vert) in graph.verts_iter() {
             let pos = d.get_world_to_screen(vert.pos, camera);
             let text_width = d.measure_text(&vert.alias, 10);
-            d.draw_text_ex(&font, &vert.alias, pos - rvec2(text_width/2, font.baseSize/2), font.baseSize as f32, 2.0, Color::WHITE);
+            d.draw_text_ex(&font, &vert.alias, pos - rvec2(text_width/2, font.baseSize/2), font.baseSize as f32, 1.0, Color::WHITE);
             if let Some(Visit { distance, parent }) = route.visited[v as usize] {
                 let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].alias);
                 let text = format!("{} ({parent_text})", distance.ceil());
-                d.draw_text_ex(&font, &text, pos + rvec2(text_width/2 + 3, 3), font.baseSize as f32, 2.0, Color::GRAY);
+                d.draw_text_ex(&font, &text, pos + rvec2(text_width/2 + 3, 3), font.baseSize as f32, 1.0, Color::GRAY);
             }
         }
 
@@ -764,12 +764,12 @@ fn main() {
                 ConsoleLineCategory::Fatal      => (Color::SALMON,    "fatal: "  ),
             };
             for line in format!("{prefix}{}", item.msg).lines() {
-                d.draw_text_ex(&font, &line, rvec2(0, font.baseSize*n), font.baseSize as f32, 2.0, color);
+                d.draw_text_ex(&font, &line, rvec2(0, font.baseSize*n), font.baseSize as f32, 1.0, color);
                 n += 1;
             }
         }
-        d.draw_text_ex(&font, " !\"#$%\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~", rvec2(0, window_height - font.baseSize*3), font.baseSize as f32, 2.0, Color::YELLOW);
-        d.draw_text_ex(&font, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG", rvec2(0, window_height - font.baseSize*2), font.baseSize as f32, 2.0, Color::YELLOW);
-        d.draw_text_ex(&font, "the quick brown fox jumps over the lazy dog", rvec2(0, window_height - font.baseSize), font.baseSize as f32, 2.0, Color::YELLOW);
+        d.draw_text_ex(&font, " !\"#$%\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~", rvec2(0, window_height - font.baseSize*3), font.baseSize as f32, 1.0, Color::YELLOW);
+        d.draw_text_ex(&font, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG", rvec2(0, window_height - font.baseSize*2), font.baseSize as f32, 1.0, Color::YELLOW);
+        d.draw_text_ex(&font, "the quick brown fox jumps over the lazy dog", rvec2(0, window_height - font.baseSize), font.baseSize as f32, 1.0, Color::YELLOW);
     }
 }
