@@ -756,8 +756,6 @@ fn main() {
     let mut graph = WeightedGraph::new(verts, edges);
 
     let mut route = None;
-    let mut is_paused = false;
-    let mut was_paused = false; // paused before giving command
 
     const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
     let mut camera = Camera3D::perspective(
@@ -773,7 +771,6 @@ fn main() {
     let mut console: Console = Console::new();
     let mut is_debugging = false;
 
-    let mut last_route_step = Instant::now();
     let mut tempo_ticks = 1;
     let mut tempo_ms = 16;
 
@@ -800,7 +797,6 @@ fn main() {
     'window: while !rl.window_should_close() {
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
             is_giving_command = false;
-            is_paused = was_paused;
             console.command.clear();
         }
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
@@ -809,15 +805,11 @@ fn main() {
                 // begin giving command
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
-                was_paused = is_paused;
-                is_paused = true;
 
                 console.command.clear();
                 console.reply.clear();
             } else {
                 // finish giving command
-                is_paused = was_paused;
-
                 if !console.command.is_empty() {
                     command_history.push_front(console.command.clone());
                     command_history_offset = 0;let mut args = command_history.front().unwrap().split(' ');
@@ -908,6 +900,7 @@ fn main() {
                                     CMD_TEMPO => vec![
                                         format!("{self} <TICKS>/<MILLISECONDS>"),
                                         format!("{self} reset"),
+                                        format!("{self} sprint"),
                                         format!("{self}"),
                                     ],
                                 }
@@ -945,6 +938,7 @@ fn main() {
                                     CMD_TEMPO => &[
                                         "set the route tick speed in ticks per milliseconds",
                                         "set the route tick speed to the default (1 step per frame)",
+                                        "set the route tick speed to the maximum (1 step every 0 milliseconds)",
                                         "print the current tempo",
                                     ],
                                 }
@@ -981,7 +975,7 @@ fn main() {
                                                         .ok()
                                                     }).peekable();
                                                     if target_iter.peek().is_some() {
-                                                        route = Some(RouteGenerator::new(&graph, start, target_iter));
+                                                        route = Some((RouteGenerator::new(&graph, start, target_iter), Instant::now()));
                                                         write_cout!(@reply: console, Info, "generating route");
                                                     } else {
                                                         write_cout!(@reply: console, Error, "no targets provided");
@@ -995,7 +989,7 @@ fn main() {
                                     }
 
                                     CMD_SV_ROUTE_ADD => {
-                                        if let Some(ref mut route) = route {
+                                        if let Some((route, _)) = &mut route {
                                             let target_iter = args.filter_map(|id| graph.find_vert(id).ok());
                                             route.add_targets(&mut console, target_iter);
                                             write_cout!(@reply: console, Info, "extending route");
@@ -1055,21 +1049,26 @@ fn main() {
 
                                     CMD_TEMPO => {
                                         if let Some(arg) = args.next() {
+                                            let mut is_changed = false;
                                             if arg == "reset" {
                                                 tempo_ticks = 1;
                                                 tempo_ms = 16;
-                                                write_cout!(@reply: console, Info, "set tempo to {tempo_ticks} steps every {tempo_ms}ms");
+                                                is_changed = true;
+                                            } else if arg == "sprint" {
+                                                tempo_ticks = 1;
+                                                tempo_ms = 0;
+                                                is_changed = true;
                                             } else if let Some((ticks, ms)) = arg.split_once('/') {
-                                                match ticks.parse() {
-                                                    Ok(ticks) => tempo_ticks = ticks,
-                                                    Err(e) => write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"),
+                                                let ticks = ticks.parse().inspect_err(|e| write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"));
+                                                let ms = ms.parse().inspect_err(|e| write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"));
+                                                if let (Ok(ticks), Ok(ms)) = (ticks, ms) {
+                                                    (tempo_ticks, tempo_ms) = (ticks, ms);
+                                                    is_changed = true;
                                                 }
-                                                match ms.parse() {
-                                                    Ok(ms) => tempo_ms = ms,
-                                                    Err(e) => write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"),
-                                                }
-                                                write_cout!(@reply: console, Info, "set tempo to {ticks} steps every {ms}ms");
                                             } else { check_usage = true; }
+                                            if is_changed {
+                                                write_cout!(@reply: console, Info, "set tempo to {tempo_ticks} steps every {tempo_ms}ms");
+                                            }
                                         } else {
                                             write_cout!(@reply: console, Info, "current tempo is {tempo_ticks} steps every {tempo_ms}ms");
                                         }
@@ -1177,21 +1176,23 @@ fn main() {
             camera.target += pan;
         }
 
-        if !is_paused {
-            if let Some(ref mut route) = route {
-                if !route.is_finished {
-                    let ticks = if let Some(tempo_ms) = std::num::NonZeroU128::new(tempo_ms) {
-                        std::mem::replace(&mut last_route_step, Instant::now()).elapsed().as_millis()/tempo_ms
-                    } else {
-                        u128::MAX // until finished
-                    };
-                    if ticks > 0 {
-                        for _ in 0..ticks.saturating_mul(tempo_ticks) {
-                            if route.is_finished { break; }
-                            route.step(&mut console);
-                        }
+        if let Some((route, last_step)) = &mut route {
+            if !route.is_finished {
+                if let Some(tempo_ms) = std::num::NonZeroU128::new(tempo_ms) {
+                    let ms_elapsed = last_step.elapsed().as_millis();
+                    let ticks = tempo_ticks * ms_elapsed/tempo_ms;
+                    println!("tempo_ticks: {tempo_ticks} tempo_ms: {tempo_ms} ms_elapsed: {ms_elapsed} ticks: {ticks}");
+                    for _ in 0..ticks {
+                        if route.is_finished { break; }
+                        route.step(&mut console);
+                        *last_step = Instant::now();
                     }
-                }
+                } else {
+                    while !route.is_finished {
+                        route.step(&mut console);
+                        *last_step = Instant::now();
+                    }
+                };
             }
         }
 
@@ -1219,7 +1220,7 @@ fn main() {
             for (v, vert) in graph.verts_iter() {
                 let distance_from_target = vert.pos - camera.target;
                 let color = loop {
-                    if let Some(route) = &route {
+                    if let Some((route, _)) = &route {
                         if let Phase::Edge { current, i } = &route.phase {
                             if &v == current {
                                 break Color::SKYBLUE;
@@ -1244,14 +1245,14 @@ fn main() {
                 };
                 let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
                 d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, resolution, resolution, color);
-                if let Some(route) = &route {
+                if let Some((route, _)) = &route {
                     if let Some(Visit { parent: Some(p), .. }) = route.visited[v as usize] {
                         d.draw_capsule(graph.verts[p as usize].pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
                     }
                 }
             }
 
-            if let Some(route) = &route {
+            if let Some((route, _)) = &route {
                 for pair in route.result.windows(2) {
                     let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
                     d.draw_capsule(graph.verts[*a as usize].pos*SCALE_FACTOR, graph.verts[*b as usize].pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
@@ -1270,7 +1271,7 @@ fn main() {
                 unsafe { ffi::MeasureTextEx(*font.as_ref(), c_text.as_ptr(), font.baseSize as f32, 0.0) }
             };
             d.draw_text_ex(&font, text, pos - rvec2(text_size.x*0.5, font.baseSize/2), font.baseSize as f32, 0.0, Color::WHITE);
-            if let Some(route) = &route {
+            if let Some((route, _)) = &route {
                 if let Some(Visit { distance, parent }) = route.visited[v as usize] {
                     let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].alias);
                     let text = format!("{} ({parent_text})", distance.ceil());
