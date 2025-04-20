@@ -564,6 +564,33 @@ impl std::fmt::Display for Cmd {
     }
 }
 
+fn pop_word(s: &mut String) {
+    let st = s.trim_end();
+    if let Some(last_char) = st.chars().last() {
+        let new_len = if last_char.is_alphanumeric() || last_char == '_' {
+            st.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()
+        } else if last_char == ']' {
+            let trimmed = st.trim_end_matches(']');
+            let len = trimmed.len();
+            if trimmed.ends_with('[') { len - 1 } else { len }
+        } else if last_char == ')' {
+            let trimmed = st.trim_end_matches(')');
+            let len = trimmed.len();
+            if trimmed.ends_with('{') { len - 1 } else { len }
+        } else if last_char == '}' {
+            let trimmed = st.trim_end_matches('}');
+            let len = trimmed.len();
+            if trimmed.ends_with('{') { len - 1 } else { len }
+        } else {
+            st.trim_end_matches(last_char).len()
+        };
+
+        while s.len() > new_len {
+            s.pop();
+        }
+    }
+}
+
 fn main() {
 
     define_verts!{
@@ -786,13 +813,21 @@ fn main() {
                 console.command.push(ch);
             } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
                 backspace_pressed = Some(Instant::now());
-                console.command.pop();
+                if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL) {
+                    pop_word(&mut console.command);
+                } else {
+                    console.command.pop();
+                }
             } else if let Some(pressed_time) = &mut backspace_pressed {
                 const DELAY: Duration = Duration::from_millis(550);
                 const REP: Duration = Duration::from_millis(33);
                 if pressed_time.elapsed() >= DELAY {
                     *pressed_time = Instant::now() - DELAY + REP;
-                    console.command.pop();
+                    if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL) {
+                        pop_word(&mut console.command);
+                    } else {
+                        console.command.pop();
+                    }
                 }
             } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
                 console.command = command_history.get(command_history_offset as usize).cloned().unwrap_or_default();
@@ -995,38 +1030,78 @@ fn main() {
                     ConsoleLineCategory::Error => (Color::RED, "err: ", ""),
                     ConsoleLineCategory::Fatal => (Color::SALMON, "fatal: ", ""),
                 };
-                for mut line in format!("{prefix}{}{suffix}", item.msg).lines() {
-                    let mut x = 0.0;
+                for line in format!("{prefix}{}{suffix}", item.msg).lines() {
                     let y = font.baseSize*line_idx;
-                    if let Some(color_start) = line.find("<color=rgb(") {
-                        let (pre, rest) = line.split_at(color_start);
-                        if let Some(element_len) = rest.find(")>") {
-                            let element = &rest[..element_len];
-                            let rest = &rest[element_len + ")>".len()..];
-                            let color_str = &element["<color=rgb(".len()..];
-                            if color_str.len() <= "255, 255, 255".len() {
-                                let mut color_iter = color_str.split(',').flat_map(|s| s.trim().parse::<u8>());
-                                let r = color_iter.next();
-                                let g = color_iter.next();
-                                let b = color_iter.next();
-                                if let (Some(r), Some(g), Some(b)) = (r, g, b) {
-                                    if let Some(colored_len) = rest.find("</color>") {
-                                        let colored = &rest[..colored_len];
-                                        line = &rest[colored_len + "</color>".len()..];
+                    for (x, text, color) in SplitStyled::new(&line, d.measure_text_ex(&font, "M", font.baseSize as f32, 0.0).x, 0.0, color) {
+                        d.draw_text_ex(&font, text, rvec2(x, y), font.baseSize as f32, 0.0, color);
+                    }
+                    line_idx += 1;
+                }
+            }
+        }
+    }
+}
 
-                                        d.draw_text_ex(&font, pre, rvec2(x, y), font.baseSize as f32, 0.0, color);
-                                        x += d.measure_text_ex(&font, pre, font.baseSize as f32, 0.0).x;
+pub struct SplitStyled<'a> {
+    line: &'a str,
+    char_width: f32,
+    spacing: f32,
+    color: Color,
+    x: f32,
+    upcoming: Option<<Self as Iterator>::Item>,
+}
+impl<'a> SplitStyled<'a> {
+    pub fn new(line: &'a str, char_width: f32, spacing: f32, color: Color) -> Self {
+        Self {
+            line,
+            char_width,
+            spacing,
+            color,
+            x: 0.0,
+            upcoming: None,
+        }
+    }
+}
+impl<'a> Iterator for SplitStyled<'a> {
+    type Item = (f32, &'a str, Color);
 
-                                        d.draw_text_ex(&font, colored, rvec2(x, y), font.baseSize as f32, 0.0, Color::new(r, g, b, 255));
-                                        x += d.measure_text_ex(&font, colored, font.baseSize as f32, 0.0).x;
-                                    }
-                                }
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.upcoming.is_some() {
+            self.upcoming.take()
+        } else {
+            let mut pre;
+            let mut rest = self.line;
+            while let Some(color_start) = rest.find("<color=rgb(") {
+                (pre, rest) = rest.split_at(color_start);
+                if let Some(element_len) = rest.find(")>") {
+                    let element = &rest[..element_len];
+                    let rest = &rest[element_len + ")>".len()..];
+                    let color_str = &element["<color=rgb(".len()..];
+                    if color_str.len() <= "255, 255, 255".len() {
+                        let mut color_iter = color_str.split(',').flat_map(|s| s.trim().parse::<u8>());
+                        let r = color_iter.next();
+                        let g = color_iter.next();
+                        let b = color_iter.next();
+                        if let (Some(r), Some(g), Some(b)) = (r, g, b) {
+                            if let Some(colored_len) = rest.find("</color>") {
+                                let colored = &rest[..colored_len];
+                                self.line = &rest[colored_len + "</color>".len()..];
+
+                                let item = (self.x, pre, self.color);
+                                self.x += self.char_width*pre.len() as f32 + self.spacing*(pre.len() as f32 - 1.0);
+                                self.upcoming = Some((self.x, colored, Color::new(r, g, b, 255)));
+                                self.x += self.char_width*colored.len() as f32 + self.spacing*(colored.len() as f32 - 1.0);
+                                return Some(item);
                             }
                         }
                     }
-                    d.draw_text_ex(&font, &line, rvec2(x, y), font.baseSize as f32, 0.0, color);
-                    line_idx += 1;
                 }
+                rest = &rest[color_start + 1..];
+            }
+            if !self.line.is_empty() {
+                Some((self.x, std::mem::replace(&mut self.line, ""), self.color))
+            } else {
+                None
             }
         }
     }
