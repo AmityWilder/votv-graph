@@ -1,12 +1,15 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use std::borrow::Cow;
-use paste::paste;
 use raylib::prelude::*;
+
+const VERTEX_RADIUS: f32 = 8.0;
+const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsoleLineCategory {
     Route,
+    Ghost,
     Command,
     TargetList,
     Trace,
@@ -46,6 +49,9 @@ impl<'a> ConsoleLineRef<'a> {
     pub fn route(msg: &'a str) -> Self {
         Self::new(ConsoleLineCategory::Route, msg)
     }
+    pub fn ghost(msg: &'a str) -> Self {
+        Self::new(ConsoleLineCategory::Ghost, msg)
+    }
     pub fn command(msg: &'a str) -> Self {
         Self::new(ConsoleLineCategory::Command, msg)
     }
@@ -71,15 +77,6 @@ impl Console {
             target: None,
             debug: Vec::new(),
         }
-    }
-
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = ConsoleLineRef<'_>> {
-        None.into_iter()
-            .chain(std::iter::once_with(|| ConsoleLineRef::command(&self.command)))
-            .chain(self.reply.iter().map(|item| item.as_line_ref()))
-            // .chain(std::iter::once(ConsoleLineRef::route(&self.route)))
-            // .chain(self.target.iter().map(|msg| ConsoleLineRef::target_list(msg)))
-            .chain(self.debug.iter().map(|item| item.as_line_ref()))
     }
 
     pub fn reply(&mut self, cat: ConsoleLineCategory, msg: std::fmt::Arguments<'_>) {
@@ -229,8 +226,7 @@ pub struct Adjacent {
     weight: f32,
 }
 
-pub struct RouteGenerator<'a> {
-    pub graph: &'a WeightedGraph,
+pub struct RouteGenerator {
     pub targets: Vec<VertexID>,
     pub result: Vec<VertexID>,
     pub root: VertexID,
@@ -240,14 +236,13 @@ pub struct RouteGenerator<'a> {
     pub is_finished: bool,
 }
 
-impl<'a> RouteGenerator<'a> {
-    pub fn new(graph: &'a WeightedGraph, start: VertexID, targets: impl IntoIterator<Item = VertexID>) -> Self {
+impl RouteGenerator {
+    pub fn new(num_verts: usize, start: VertexID, targets: impl IntoIterator<Item = VertexID>) -> Self {
         Self {
-            graph,
             targets: Vec::from_iter(targets),
             result: vec![start],
             root: start,
-            visited: vec![const { None }; graph.verts.len()].into_boxed_slice(),
+            visited: vec![const { None }; num_verts].into_boxed_slice(),
             queue: VecDeque::new(),
             phase: Phase::None,
             is_finished: false,
@@ -291,7 +286,7 @@ impl<'a> RouteGenerator<'a> {
         self.begin_phase_edge(console);
     }
 
-    pub fn step(&mut self, console: &mut Console) {
+    pub fn step(&mut self, console: &mut Console, graph: &WeightedGraph) {
         debug_assert!(!self.is_finished, "do not continue finished route");
         match &mut self.phase {
             Phase::None => {
@@ -300,12 +295,12 @@ impl<'a> RouteGenerator<'a> {
             }
 
             Phase::Edge { current, i } => {
-                if let Some(&Adjacent { vertex, weight }) = self.graph.adjacent[*current as usize].get(*i) {
-                    write_cout!(console, Info, 2, "looking at vertex {current} ({i}/{})", self.graph.adjacent[*current as usize].len());
+                if let Some(&Adjacent { vertex, weight }) = graph.adjacent[*current as usize].get(*i) {
+                    write_cout!(console, Info, 2, "looking at vertex {current} ({i}/{})", graph.adjacent[*current as usize].len());
                     if self.visited[vertex as usize].is_none() {
                         self.queue.push_back(vertex);
                         write_cout!(console, Info, 3, "pushed vertex {vertex} to queue");
-                        for &Adjacent { vertex, .. } in &self.graph.adjacent[vertex as usize] {
+                        for &Adjacent { vertex, .. } in &graph.adjacent[vertex as usize] {
                             if !self.queue.contains(&vertex) {
                                 self.queue.push_back(vertex);
                                 write_cout!(console, Info, 3, "pushed vertex {vertex} to queue");
@@ -360,7 +355,7 @@ impl<'a> RouteGenerator<'a> {
                     write_cout!(console, Info, 2, "adding vertex {} to results", self.root);
                     if self.targets.is_empty() {
                         let final_route = self.result.iter()
-                            .map(|&v| self.graph.verts[v as usize].id.as_str())
+                            .map(|&v| graph.verts[v as usize].id.as_str())
                             .collect::<Vec<&str>>()
                             .join(" - ");
                         console.reply.clear();
@@ -372,7 +367,7 @@ impl<'a> RouteGenerator<'a> {
                         if *i + 1 < self.result.len() {
                             let a = &self.result[*i];
                             let b = &self.result[*i + 1];
-                            distance += self.graph.adjacent[*a as usize].iter()
+                            distance += graph.adjacent[*a as usize].iter()
                                 .find_map(|e| (&e.vertex == b).then_some(e.weight))
                                 .expect("results should be adjacent");
                             self.visited[*b as usize] = Some(Visit { distance, parent: Some(*a) });
@@ -420,6 +415,7 @@ macro_rules! define_edges {
     };
 }
 
+#[derive(Debug)]
 pub enum ParseCoordsError {
     Syntax,
     ParseFloat(std::num::ParseFloatError),
@@ -427,8 +423,16 @@ pub enum ParseCoordsError {
 impl std::fmt::Display for ParseCoordsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseCoordsError::Syntax => write!(f, "expected x:<???>/y:<???>"),
-            ParseCoordsError::ParseFloat(e) => write!(f, "{e}"),
+            ParseCoordsError::Syntax => f.write_str("expected x:<???>/y:<???>"),
+            ParseCoordsError::ParseFloat(_) => f.write_str("failed to read number"),
+        }
+    }
+}
+impl std::error::Error for ParseCoordsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ParseCoordsError::Syntax => None,
+            ParseCoordsError::ParseFloat(e) => Some(e),
         }
     }
 }
@@ -440,199 +444,71 @@ pub fn parse_coords(coords: &str) -> Result<Vector3, ParseCoordsError> {
     Ok(Vector3::new(x, 0.0, y))
 }
 
-// pub struct ArgMeta {
-//     pub prefix: &'static str,
-//     pub alternates: &'static [&'static str],
-//     pub is_literal: bool,
-//     pub is_optional: bool,
-//     pub is_repeating: bool,
-//     pub separator: &'static str,
-// }
-// pub struct UsageMeta {
-//     pub args: &'static [ArgMeta],
-//     pub blurb: &'static str,
-// }
-// impl UsageMeta {
-//     pub fn args_to_string(&self) -> String {
-//         let mut req = 0;
-//         for arg in self.args {
-//             if arg.is_literal {
+macro_rules! define_commands {
+    ($(
+        $Variant:ident, $input:literal, $($args:literal, $description:literal,)+
+    )*) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[allow(non_camel_case_types)]
+        enum Cmd {
+            $($Variant,)+
+        }
+        use Cmd::*;
+        impl Cmd {
+            const LIST: [Self; [$($Variant),+].len()] = [
+                $($Variant,)+
+            ];
+            fn try_from_str(s: &str) -> Result<Self, &str> {
+                match s {
+                    $($input => Ok($Variant),)+
+                    _ => Err(s),
+                }
+            }
+            const fn as_str(&self) -> &'static str {
+                match self {
+                    $($Variant => $input,)+
+                }
+            }
+            fn usage(&self) -> &'static [&'static str] {
+                match self {
+                    $($Variant => &[$(concat!($input, $args),)*],)+
+                }
+            }
+            fn description(&self) -> &'static [&'static str] {
+                match self {
+                    $($Variant => &[$($description,)+],)+
+                }
+            }
+        }
+    };
+}
 
-//             }
-//         }
-//         let result = String::new();
-//     }
-// }
-// pub struct CommandMeta {
-//     pub id: Cmd,
-//     pub path: &'static [&'static str],
-//     pub usage: &'static [UsageMeta],
-// }
-// impl CommandMeta {
-//     pub fn usage_msg(list: &[&Self]) -> String {
-//         let args = list.iter().map(|item| item.usage.iter().map(|usage| usage.args.));
-//         let max_len = list.iter()
-//             .max_by(|a, b| a.cmp(b));
-//         let items = list.map(format!())
-//         format!("usage:{}")
-//     }
-// }
-// macro_rules! define_commands {
-//     ($(> $($path:ident)/+ $(: $({$($args:tt)+})* #[$blurb:literal])+)+) => {
-//         paste!{
-//             #[allow(non_camel_case_types)]
-//             pub enum Cmd {
-//                 $([< $($path)_+ >]),+
-//             }
-//             impl CommandMeta {
-//                 $(
-//                     #[allow(non_upper_case_globals)]
-//                     pub const [< $($path)_+ >]: Self = Self {
-//                         id: Cmd::[< $($path)_+ >],
-//                         path: &[$(stringify!($path)),+],
-//                         usage: &[$(
-//                             UsageMeta {
-//                                 args: &[$(define_commands!(@args: $($args)+)),*],
-//                                 blurb: $blurb,
-//                             }
-//                         ),+]
-//                     };
-//                 )+
+define_commands!{
+    CMD_HELP,          "help",          "",                               "display this information",
+    CMD_CLOSE,         "close",         "",                               "close the application",
+    CMD_DBG,           "dbg",           "",                               "toggle debug messages",
+    CMD_FOCUS,         "focus",         " <ID|ALIAS>",                    "zoom in on a particular target",
+                                        " reset",                         "reset camera orientation",
+                                        "",                               "print the name of the focused vertex",
+    CMD_SV_ROUTE,      "sv.route",      " <START> <ID|ALIAS>...",         "generate the shortest route visiting each target (separated by spaces)",
+    CMD_SV_ROUTE_ADD,  "sv.route.add",  " <ID|ALIAS>...",                 "add more targets (separated by spaces) to the current route",
+    CMD_SV_NEW,        "sv.new",        " <ID> [ALIAS] x:<???>/y:<???>",  "create a new vertex that can be targeted at x,y",
+                                        " <ID> [ALIAS] focus",            "create a new vertex that can be targeted at the focused position",
+    CMD_SV_EDGE,       "sv.edge",       " <ID|ALIAS> <ID|ALIAS>",         "create an edge connecting two existing vertices",
+                                        " <ID|ALIAS>",                    "print a list of all vertices adjacent to the target",
+    CMD_TEMPO,         "tempo",         " <TICKS>/<MILLISECONDS>",        "set the route tick speed in ticks per milliseconds",
+                                        " reset",                         "set the route tick speed to the default (1 step per frame)",
+                                        " sprint",                        "set the route tick speed to the maximum (1 step every 0 milliseconds)",
+                                        "",                               "print the current tempo",
+}
 
-//                 pub const LIST: &[Self] = &[$(Self::[< $($path)_+ >]),+];
-
-//                 pub fn try_from_str(path: &str) -> Result<&'static Self, &str> {
-//                     match path {
-//                         $(stringify!($($path).+) => Ok(&Self::[< $($path)_+ >]),)+
-//                         _ => Err(path),
-//                     }
-//                 }
-//             }
-//         }
-//     };
-
-//     (@args: $($prefix:literal-)? #($($alternates:literal)or+)?.. $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: true,
-//             is_optional: true,
-//             is_repeating: true,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-//     (@args: $($prefix:literal-)? ($($alternates:literal)or+)?.. $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: false,
-//             is_optional: true,
-//             is_repeating: true,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-//     (@args: $($prefix:literal-)? #($($alternates:literal)or+).. $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: true,
-//             is_optional: false,
-//             is_repeating: true,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-//     (@args: $($prefix:literal-)? ($($alternates:literal)or+).. $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: false,
-//             is_optional: false,
-//             is_repeating: true,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-//     (@args: $($prefix:literal-)? #($($alternates:literal)or+)? $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: true,
-//             is_optional: true,
-//             is_repeating: false,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-//     (@args: $($prefix:literal-)? ($($alternates:literal)or+)? $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: false,
-//             is_optional: true,
-//             is_repeating: false,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-//     (@args: $($prefix:literal-)? #($($alternates:literal)or+) $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: true,
-//             is_optional: false,
-//             is_repeating: false,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-//     (@args: $($prefix:literal-)? ($($alternates:literal)or+) $($separator:literal)?) => {
-//         ArgMeta {
-//             prefix: define_commands!(@prefix: $($prefix)?),
-//             alternates: &[$($alternates),+],
-//             is_literal: false,
-//             is_optional: false,
-//             is_repeating: false,
-//             separator: define_commands!(@separator: $($separator)?),
-//         }
-//     };
-
-//     (@prefix: $prefix:literal) => { $prefix };
-//     (@prefix: ) => { "" };
-
-//     (@separator: $separator:literal) => { $separator };
-//     (@separator: ) => { " " };
-// }
-
-// define_commands!{
-//     > help
-//         :                                                                   #["display this information"]
-
-//     > dbg
-//         :                                                                   #["toggle debug messages"]
-
-//     > cam/focus
-//         : { ("ID" or "ALIAS") }                                             #["zoom in on a particular target"]
-//         : { #("reset") }                                                    #["reset camera orientation"]
-//         :                                                                   #["print the name of the focused vertex"]
-
-//     > sv/route
-//         : { ("START") } { ("ID" or "ALIAS").. }                             #["generate the shortest route visiting each target (separated by spaces)"]
-
-//     > sv/route/add
-//         : { ("ID" or "ALIAS").. }                                           #["add more targets (separated by spaces) to the current route"]
-
-//     > sv/new
-//         : { ("ID") } { ("ALIAS")? } { "x:"- ("???") "/" } { "y:"- ("???") } #["create a new vertex that can be targeted at x,y"]
-//         : { ("ID") } { ("ALIAS")? } { #("focus") }                          #["create a new vertex that can be targeted at the focused position"]
-
-//     > sv/edge
-//         : { ("ID" or "ALIAS") } { ("ID" or "ALIAS") }                       #["create an edge connecting two existing vertices"]
-//         : { ("ID" or "ALIAS") }                                             #["print a list of all vertices adjacent to the target"]
-
-//     > tempo
-//         : { ("TICKS") "/" } { ("MILLISECONDS") }                            #["set the route tick speed in ticks per milliseconds"]
-//         : { #("reset") }                                                    #["set the route tick speed to the default (1 step per frame)"]
-//         :                                                                   #["print the current tempo"]
-// }
+impl std::fmt::Display for Cmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 fn main() {
-    const VERTEX_RADIUS: f32 = 8.0;
 
     define_verts!{
         verts:
@@ -757,7 +633,6 @@ fn main() {
 
     let mut route = None;
 
-    const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
     let mut camera = Camera3D::perspective(
         CAMERA_POSITION_DEFAULT,
         Vector3::zero(),
@@ -805,316 +680,34 @@ fn main() {
                 // begin giving command
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
-
                 console.command.clear();
-                console.reply.clear();
             } else {
                 // finish giving command
                 if !console.command.is_empty() {
-                    command_history.push_front(console.command.clone());
+                    command_history.push_front(std::mem::take(&mut console.command));
                     command_history_offset = 0;let mut args = command_history.front().unwrap().split(' ');
 
+                    console.reply.clear();
                     if let Some(cmd) = args.next() {
-                        #[allow(non_camel_case_types)]
-                        enum Cmd {
-                            CMD_HELP,
-                            CMD_CLOSE,
-                            CMD_DBG,
-                            CMD_FOCUS,
-                            CMD_SV_ROUTE,
-                            CMD_SV_ROUTE_ADD,
-                            CMD_SV_NEW,
-                            CMD_SV_EDGE,
-                            CMD_TEMPO,
-                        }
-                        use Cmd::*;
-                        impl Cmd {
-                            const LIST: [Self; 9] = [
-                                CMD_HELP,
-                                CMD_CLOSE,
-                                CMD_DBG,
-                                CMD_FOCUS,
-                                CMD_SV_ROUTE,
-                                CMD_SV_ROUTE_ADD,
-                                CMD_SV_NEW,
-                                CMD_SV_EDGE,
-                                CMD_TEMPO,
-                            ];
-                            fn try_from_str(s: &str) -> Result<Self, &str> {
-                                match s {
-                                    "help" => Ok(CMD_HELP),
-                                    "close" => Ok(CMD_CLOSE),
-                                    "dbg" => Ok(CMD_DBG),
-                                    "focus" => Ok(CMD_FOCUS),
-                                    "sv.route" => Ok(CMD_SV_ROUTE),
-                                    "sv.route.add" => Ok(CMD_SV_ROUTE_ADD),
-                                    "sv.new" => Ok(CMD_SV_NEW),
-                                    "sv.edge" => Ok(CMD_SV_EDGE),
-                                    "tempo" => Ok(CMD_TEMPO),
-                                    _ => Err(s),
-                                }
-                            }
-                            const fn as_str(&self) -> &'static str {
-                                match self {
-                                    CMD_HELP => "help",
-                                    CMD_CLOSE => "close",
-                                    CMD_DBG => "dbg",
-                                    CMD_FOCUS => "focus",
-                                    CMD_SV_ROUTE => "sv.route",
-                                    CMD_SV_ROUTE_ADD => "sv.route.add",
-                                    CMD_SV_NEW => "sv.new",
-                                    CMD_SV_EDGE => "sv.edge",
-                                    CMD_TEMPO => "tempo",
-                                }
-                            }
-                            fn usage(&self) -> Vec<String> {
-                                match self {
-                                    CMD_HELP => vec![
-                                        format!("{self}"),
-                                    ],
-                                    CMD_CLOSE => vec![
-                                        format!("{self}"),
-                                    ],
-                                    CMD_DBG => vec![
-                                        format!("{self}"),
-                                    ],
-                                    CMD_FOCUS => vec![
-                                        format!("{self} <ID|ALIAS>"),
-                                        format!("{self} reset"),
-                                        format!("{self}"),
-                                    ],
-                                    CMD_SV_ROUTE => vec![
-                                        format!("{self} <START> <ID|ALIAS>..."),
-                                    ],
-                                    CMD_SV_ROUTE_ADD => vec![
-                                        format!("{self} <ID|ALIAS>..."),
-                                    ],
-                                    CMD_SV_NEW => vec![
-                                        format!("{self} <ID> [ALIAS] x:<???>/y:<???>"),
-                                        format!("{self} <ID> [ALIAS] focus"),
-                                    ],
-                                    CMD_SV_EDGE => vec![
-                                        format!("{self} <ID|ALIAS> <ID|ALIAS>"),
-                                        format!("{self} <ID|ALIAS>"),
-                                    ],
-                                    CMD_TEMPO => vec![
-                                        format!("{self} <TICKS>/<MILLISECONDS>"),
-                                        format!("{self} reset"),
-                                        format!("{self} sprint"),
-                                        format!("{self}"),
-                                    ],
-                                }
-                            }
-                            fn description(&self) -> &'static [&'static str] {
-                                match self {
-                                    CMD_HELP => &[
-                                        "display this information",
-                                    ],
-                                    CMD_CLOSE => &[
-                                        "close the application",
-                                    ],
-                                    CMD_DBG => &[
-                                        "toggle debug messages",
-                                    ],
-                                    CMD_FOCUS => &[
-                                        "zoom in on a particular target",
-                                        "reset camera orientation",
-                                        "print the name of the focused vertex",
-                                    ],
-                                    CMD_SV_ROUTE => &[
-                                        "generate the shortest route visiting each target (separated by spaces)",
-                                    ],
-                                    CMD_SV_ROUTE_ADD => &[
-                                        "add more targets (separated by spaces) to the current route",
-                                    ],
-                                    CMD_SV_NEW => &[
-                                        "create a new vertex that can be targeted at x,y",
-                                        "create a new vertex that can be targeted at the focused position",
-                                    ],
-                                    CMD_SV_EDGE => &[
-                                        "create an edge connecting two existing vertices",
-                                        "print a list of all vertices adjacent to the target",
-                                    ],
-                                    CMD_TEMPO => &[
-                                        "set the route tick speed in ticks per milliseconds",
-                                        "set the route tick speed to the default (1 step per frame)",
-                                        "set the route tick speed to the maximum (1 step every 0 milliseconds)",
-                                        "print the current tempo",
-                                    ],
-                                }
-                            }
-                        }
-                        impl std::fmt::Display for Cmd {
-                            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                                write!(f, "{}", self.as_str())
-                            }
-                        }
                         match Cmd::try_from_str(cmd) {
                             Ok(cmd) => {
-                                let mut check_usage = false;
-                                match cmd {
-                                    CMD_HELP => {
-                                        write_cout!(@reply: console, Info, "commands:{}",
-                                            Cmd::LIST.iter()
-                                                .flat_map(|item| item.usage().into_iter().zip(item.description()))
-                                                .map(|(usage, desc)| format!("\n    {usage:<35}  {desc}"))
-                                                .collect::<Vec<_>>()
-                                                .concat(),
-                                        );
-                                    }
-
-                                    CMD_SV_ROUTE => {
-                                        let mut target_iter = args.map(|id| graph.find_vert(id));
-
-                                        if let Some(first) = target_iter.next() {
-                                            match first {
-                                                Ok(start) => {
-                                                    let mut target_iter = target_iter.filter_map(|v| {
-                                                        v.inspect(|v| write_cout!(@reply: console, Info, "adding vertex {v} to targets"))
-                                                        .inspect_err(|id| write_cout!(@reply: console, Warning, "vertex \"{id}\" does not exist, skipping"))
-                                                        .ok()
-                                                    }).peekable();
-                                                    if target_iter.peek().is_some() {
-                                                        route = Some((RouteGenerator::new(&graph, start, target_iter), Instant::now()));
-                                                        write_cout!(@reply: console, Info, "generating route");
-                                                    } else {
-                                                        write_cout!(@reply: console, Error, "no targets provided");
-                                                    }
-                                                }
-                                                Err(start) => {
-                                                    write_cout!(@reply: console, Error, "vertex \"{start}\" does not exist");
-                                                }
-                                            }
-                                        } else { check_usage = true; }
-                                    }
-
-                                    CMD_SV_ROUTE_ADD => {
-                                        if let Some((route, _)) = &mut route {
-                                            let target_iter = args.filter_map(|id| graph.find_vert(id).ok());
-                                            route.add_targets(&mut console, target_iter);
-                                            write_cout!(@reply: console, Info, "extending route");
-                                        } else {
-                                            write_cout!(@reply: console, Error, "no ongoing route to extend");
-                                        }
-                                    }
-
-                                    CMD_SV_NEW => {
-                                        if let Some(id) = args.next() {
-                                            let mut alias = args.next();
-                                            let coords = args.next().or_else(|| alias.take());
-                                            if let Some(coords) = coords {
-                                                let pos = if coords == "focus" {
-                                                    Some(camera.target)
-                                                } else {
-                                                    match parse_coords(coords) {
-                                                        Ok(pos) => Some(pos),
-                                                        Err(e) => {
-                                                            write_cout!(@reply: console, Error, "could not parse coordinates: {e}");
-                                                            None
-                                                        },
-                                                    }
-                                                };
-                                                if let Some(pos) = pos {
-                                                    graph.add_vertex(id, alias.unwrap_or(id), pos);
-                                                    route = None;
-                                                    write_cout!(@reply: console, Info, "created new vertex");
-                                                }
-                                            } else { check_usage = true; }
-                                        } else { check_usage = true; }
-                                    }
-
-                                    CMD_SV_EDGE => {
-                                        if let Some(a) = args.next() {
-                                            if let Some(b) = args.next() {
-                                                match graph.find_vert(a) {
-                                                    Ok(a) => {
-                                                        match graph.find_vert(b) {
-                                                            Ok(b) => {
-                                                                if graph.adjacent[a as usize].iter().any(|Adjacent { vertex, .. }| vertex == &b) {
-                                                                    write_cout!(@reply: console, Warning, "vertices {a} and {b} are already connected");
-                                                                } else {
-                                                                    graph.add_edge(a, b);
-                                                                    route = None;
-                                                                    write_cout!(@reply: console, Info, "created an edge connecting vertices {a} and {b}");
-                                                                }
-                                                            }
-                                                            Err(id) => write_cout!(@reply: console, Error, "vertex \"{id}\" does not exist"),
-                                                        }
-                                                    }
-                                                    Err(id) => write_cout!(@reply: console, Error, "vertex \"{id}\" does not exist"),
-                                                }
-                                            } else { check_usage = true; }
-                                        } else { check_usage = true; }
-                                    }
-
-                                    CMD_TEMPO => {
-                                        if let Some(arg) = args.next() {
-                                            let mut is_changed = false;
-                                            if arg == "reset" {
-                                                tempo_ticks = 1;
-                                                tempo_ms = 16;
-                                                is_changed = true;
-                                            } else if arg == "sprint" {
-                                                tempo_ticks = 1;
-                                                tempo_ms = 0;
-                                                is_changed = true;
-                                            } else if let Some((ticks, ms)) = arg.split_once('/') {
-                                                let ticks = ticks.parse().inspect_err(|e| write_cout!(@reply: console, Error, "ticks (\"{ticks}\"): {e}"));
-                                                let ms = ms.parse().inspect_err(|e| write_cout!(@reply: console, Error, "ms (\"{ms}\"): {e}"));
-                                                if let (Ok(ticks), Ok(ms)) = (ticks, ms) {
-                                                    (tempo_ticks, tempo_ms) = (ticks, ms);
-                                                    is_changed = true;
-                                                }
-                                            } else { check_usage = true; }
-                                            if is_changed {
-                                                write_cout!(@reply: console, Info, "set tempo to {tempo_ticks} steps every {tempo_ms}ms");
-                                            }
-                                        } else {
-                                            write_cout!(@reply: console, Info, "current tempo is {tempo_ticks} steps every {tempo_ms}ms");
-                                        }
-                                    }
-
+                                let result = match cmd {
+                                    CMD_HELP => { run_cmd_help(&mut console); Ok(()) },
+                                    CMD_SV_ROUTE => run_cmd_sv_route(&graph, &mut route, &mut console, args),
+                                    CMD_SV_ROUTE_ADD => run_cmd_sv_route_add(&graph, &mut route, &mut console, args),
+                                    CMD_SV_NEW => run_cmd_sv_new(&mut graph, &mut route, camera, &mut console, args),
+                                    CMD_SV_EDGE => run_cmd_sv_edge(&mut graph, &mut route, &mut console, args),
+                                    CMD_TEMPO => run_cmd_tempo(&mut console, args, &mut tempo_ticks, &mut tempo_ms),
                                     CMD_DBG => {
                                         is_debugging = !is_debugging;
                                         write_cout!(@reply: console, Info, "debugging is now {}", if is_debugging { "on" } else { "off" });
+                                        Ok(())
                                     }
-
-                                    CMD_FOCUS => {
-                                        if let Some(target) = args.next() {
-                                            if target == "reset" {
-                                                camera.position = CAMERA_POSITION_DEFAULT;
-                                                camera.target = Vector3::zero();
-                                            } else {
-                                                let vert = graph.verts.iter()
-                                                    .find(|vert| (vert.id.eq_ignore_ascii_case(target) || vert.alias.eq_ignore_ascii_case(target)));
-
-                                                if let Some(vert) = vert {
-                                                    camera.target = vert.pos;
-                                                    camera.position = camera.target + Vector3::new(0.0, 400.0, 0.0);
-                                                } else {
-                                                    write_cout!(@reply: console, Error, "vertex \"{target}\" does not exist");
-                                                }
-                                            }
-                                        } else {
-                                            let vert = graph.verts.iter()
-                                                .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, camera.target, 1.0));
-
-                                            if let Some(target) = vert {
-                                                write_cout!(@reply: console, Info, "currently focusing vertex {}", target.id);
-                                            } else {
-                                                write_cout!(@reply: console, Info, "no vertex is currently focused");
-                                            }
-                                        }
-                                    }
-
-                                    CMD_CLOSE => {
-                                        break 'window;
-                                    }
-                                }
-                                if check_usage {
-                                    let usage = cmd.usage();
-                                    let has_multiple = usage.len() > 1;
-                                    write_cout!(@reply: console, Error, "usage:{}{}", if has_multiple { "\n    " } else { " " }, usage.join("\n    "));
+                                    CMD_FOCUS => run_cmd_focus(&graph, &mut camera, &mut console, args),
+                                    CMD_CLOSE => break 'window,
+                                };
+                                if let Err(e) = result {
+                                    write_cout!(@reply: console, Error, "{e}");
                                 }
                             }
 
@@ -1184,12 +777,12 @@ fn main() {
                     println!("tempo_ticks: {tempo_ticks} tempo_ms: {tempo_ms} ms_elapsed: {ms_elapsed} ticks: {ticks}");
                     for _ in 0..ticks {
                         if route.is_finished { break; }
-                        route.step(&mut console);
+                        route.step(&mut console, &graph);
                         *last_step = Instant::now();
                     }
                 } else {
                     while !route.is_finished {
-                        route.step(&mut console);
+                        route.step(&mut console, &graph);
                         *last_step = Instant::now();
                     }
                 };
@@ -1261,6 +854,14 @@ fn main() {
 
             d.draw_capsule((camera.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (camera.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
             d.draw_capsule((camera.target + Vector3::new( 0.0, 0.0, -5.0))*SCALE_FACTOR, (camera.target + Vector3::new(0.0, 0.0, 5.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+
+            // d.draw_grid(10, 100.0*SCALE_FACTOR);
+        }
+
+        {
+            let mouse_pos = d.get_mouse_position();
+            d.draw_rectangle_rec(Rectangle::new(mouse_pos.x, 0.0, 3.0, d.get_render_height() as f32), Color::new(255, 255, 255, 32));
+            d.draw_rectangle_rec(Rectangle::new(0.0, mouse_pos.y, d.get_render_width() as f32, 3.0), Color::new(255, 255, 255, 32));
         }
 
         for (v, vert) in graph.verts_iter() {
@@ -1282,53 +883,270 @@ fn main() {
 
         // Console
 
-        // console.route = route.result.iter()
-        //     .map(|&v| graph.verts[v as usize].id.as_str())
-        //     .collect::<Vec<&str>>()
-        //     .join(" - ");
-
-        // if !is_giving_command {
-            // let target_text = route.targets.iter()
-            //     .map(|&v| graph.verts[v as usize].id.as_str())
-            //     .collect::<Vec<&str>>()
-            //     .join(", ");
-            // console.target = Some(target_text);
-        // }
-
         if !is_giving_command {
-            d.draw_text_ex(&font,
+            d.draw_text_ex(
+                &font,
                 "use WASD to pan and RFZX to orbit",
-                rvec2(0, d.get_render_height() - font.baseSize*3), font.baseSize as f32, 0.0, Color::GREENYELLOW);
+                rvec2(0, d.get_render_height() - font.baseSize*3),
+                font.baseSize as f32,
+                0.0,
+                Color::GREENYELLOW,
+            );
         }
 
-        d.draw_text_ex(&font,
-            &if is_giving_command {
-                format!("press ENTER to run the command, or ESCAPE to cancel")
+        d.draw_text_ex(
+            &font,
+            if is_giving_command {
+                "press ENTER to run the command, or ESCAPE to cancel"
             } else {
-                format!("press ENTER to begin typing a command")
+                "press ENTER to begin typing a command"
             },
-            rvec2(0, d.get_render_height() - font.baseSize*2), font.baseSize as f32, 0.0, Color::GREENYELLOW);
+            rvec2(0, d.get_render_height() - font.baseSize*2),
+            font.baseSize as f32,
+            0.0,
+            Color::GREENYELLOW,
+        );
 
-        d.draw_text_ex(&font, &format!("x:{}/y:{}", camera.target.x, camera.target.z), rvec2(0, d.get_render_height() - font.baseSize), font.baseSize as f32, 0.0, Color::GREENYELLOW);
+        d.draw_text_ex(
+            &font,
+            &format!("x:{}/y:{}", camera.target.x, camera.target.z),
+            rvec2(0, d.get_render_height() - font.baseSize),
+            font.baseSize as f32,
+            0.0,
+            Color::GREENYELLOW,
+        );
 
-        let mut n = 0;
-        for item in console.iter() {
-            let (color, prefix, suffix) = match item.cat {
-                ConsoleLineCategory::Route                 => (Color::RAYWHITE,  "route: ", ""),
-                ConsoleLineCategory::Command               => (Color::LIGHTBLUE, ">", if is_giving_command && is_cursor_shown { "_" } else { "" }),
-                ConsoleLineCategory::TargetList            => (Color::LIME,      "targets: ", ""),
-                ConsoleLineCategory::Trace                 => (Color::DARKGRAY,  "trace: ", ""),
-                ConsoleLineCategory::Debug if is_debugging => (Color::MAGENTA,   "debug: ", ""),
-                ConsoleLineCategory::Debug                 => continue,
-                ConsoleLineCategory::Info                  => (Color::LIGHTGRAY, "", ""),
-                ConsoleLineCategory::Warning               => (Color::GOLD,      "warning: ", ""),
-                ConsoleLineCategory::Error                 => (Color::RED,       "err: ", ""),
-                ConsoleLineCategory::Fatal                 => (Color::SALMON,    "fatal: ", ""),
-            };
-            for line in format!("{prefix}{}{suffix}", item.msg).lines() {
-                d.draw_text_ex(&font, &line, rvec2(0, font.baseSize*n), font.baseSize as f32, 0.0, color);
-                n += 1;
+        {
+            let mut line_idx = 0;
+
+            let console_iter =
+                command_history.iter()
+                    .take((4 + command_history_offset).max(0) as usize)
+                    .rev()
+                    .map(|item| ConsoleLineRef::ghost(item))
+                .chain(console.reply.iter().map(|item| item.as_line_ref()))
+                .chain(std::iter::once_with(|| ConsoleLineRef::command(&console.command)))
+                .chain(is_debugging.then(|| console.debug.iter().map(|item| item.as_line_ref())).into_iter().flatten());
+
+            for item in console_iter {
+                let (color, prefix, suffix) = match item.cat {
+                    ConsoleLineCategory::Route => (Color::RAYWHITE,  "route: ", ""),
+                    ConsoleLineCategory::Ghost => (Color::LIGHTBLUE.alpha(0.5), ">", ""),
+                    ConsoleLineCategory::Command => (Color::LIGHTBLUE, ">", if is_giving_command && is_cursor_shown { "_" } else { "" }),
+                    ConsoleLineCategory::TargetList => (Color::LIME, "targets: ", ""),
+                    ConsoleLineCategory::Trace => (Color::DARKGRAY, "trace: ", ""),
+                    ConsoleLineCategory::Debug if is_debugging => (Color::MAGENTA, "debug: ", ""),
+                    ConsoleLineCategory::Debug => continue,
+                    ConsoleLineCategory::Info => (Color::LIGHTGRAY, "", ""),
+                    ConsoleLineCategory::Warning => (Color::GOLD, "warning: ", ""),
+                    ConsoleLineCategory::Error => (Color::RED, "err: ", ""),
+                    ConsoleLineCategory::Fatal => (Color::SALMON, "fatal: ", ""),
+                };
+                for line in format!("{prefix}{}{suffix}", item.msg).lines() {
+                    d.draw_text_ex(&font, &line, rvec2(0, font.baseSize*line_idx), font.baseSize as f32, 0.0, color);
+                    line_idx += 1;
+                }
             }
         }
     }
+}
+
+#[derive(Debug)]
+enum CmdError {
+    CheckUsage(Cmd),
+    VertexDNE(String),
+    MissingArgs(&'static str),
+    NoExistingRoute,
+    ParseCoordsFailed(ParseCoordsError),
+    ParseTempoTicksFailed(std::num::ParseIntError),
+    ParseTempoMillisecondsFailed(std::num::ParseIntError),
+}
+impl std::fmt::Display for CmdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Self::CheckUsage(cmd) => {
+                let usage = cmd.usage();
+                let has_multiple = usage.len() > 1;
+                write!(f, "usage:{}{}", if has_multiple { "\n    " } else { " " }, usage.join("\n    "))
+            }
+            Self::VertexDNE(id) => write!(f, "vertex \"{id}\" does not exist"),
+            Self::MissingArgs(args) => write!(f, "missing input for {args}"),
+            Self::NoExistingRoute => f.write_str("no ongoing route to extend"),
+            Self::ParseCoordsFailed(_) => f.write_str("could not parse coordinates"),
+            Self::ParseTempoTicksFailed(_) => f.write_str("could not parse ticks"),
+            Self::ParseTempoMillisecondsFailed(_) => f.write_str("could not parse milliseconds"),
+        }
+    }
+}
+impl std::error::Error for CmdError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            | Self::CheckUsage(_)
+            | Self::VertexDNE(_)
+            | Self::MissingArgs(_)
+            | Self::NoExistingRoute
+                => None,
+
+            Self::ParseCoordsFailed(e) => Some(e),
+
+            | Self::ParseTempoTicksFailed(e)
+            | Self::ParseTempoMillisecondsFailed(e)
+                => Some(e),
+        }
+    }
+}
+
+fn run_cmd_focus(
+    graph: &WeightedGraph,
+    camera: &mut Camera3D,
+    console: &mut Console,
+    mut args: std::str::Split<'_, char>,
+) -> Result<(), CmdError> {
+    if let Some(target) = args.next() {
+        if target == "reset" {
+            camera.position = CAMERA_POSITION_DEFAULT;
+            camera.target = Vector3::zero();
+            Ok(())
+        } else {
+            let vert = graph.verts.iter()
+                .find(|vert| (vert.id.eq_ignore_ascii_case(target) || vert.alias.eq_ignore_ascii_case(target)));
+
+            if let Some(vert) = vert {
+                camera.target = vert.pos;
+                camera.position = camera.target + Vector3::new(0.0, 400.0, 0.0);
+                Ok(())
+            } else {
+                Err(CmdError::VertexDNE(target.to_string()))
+            }
+        }
+    } else {
+        let vert = graph.verts.iter()
+            .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, camera.target, 1.0));
+
+        if let Some(target) = vert {
+            write_cout!(@reply: console, Info, "currently focusing vertex {}", target.id);
+        } else {
+            write_cout!(@reply: console, Info, "no vertex is currently focused");
+        }
+        Ok(())
+    }
+}
+
+fn run_cmd_help(console: &mut Console) {
+    write_cout!(@reply: console, Info, "commands:{}",
+        Cmd::LIST.iter()
+            .flat_map(|item| item.usage().into_iter().zip(item.description()))
+            .map(|(usage, desc)| format!("\n    {usage:<35}  {desc}"))
+            .collect::<Vec<_>>()
+            .concat(),
+    );
+}
+
+fn run_cmd_sv_route(
+    graph: &WeightedGraph,
+    route: &mut Option<(RouteGenerator, Instant)>,
+    console: &mut Console,
+    args: std::str::Split<'_, char>,
+) -> Result<(), CmdError> {
+    let mut target_iter = args.map(|id| graph.find_vert(id));
+
+    let start = target_iter.next()
+        .ok_or(CmdError::CheckUsage(CMD_SV_ROUTE))?
+        .map_err(|start| CmdError::VertexDNE(start.to_string()))?;
+
+    let mut target_iter = target_iter
+        .filter_map(|v| {
+            v.inspect(|v| write_cout!(@reply: console, Info, "adding vertex {v} to targets"))
+            .inspect_err(|id| write_cout!(@reply: console, Warning, "vertex \"{id}\" does not exist, ignoring"))
+            .ok()
+        })
+        .peekable();
+    if target_iter.peek().is_some() {
+        *route = Some((RouteGenerator::new(graph.verts.len(), start, target_iter), Instant::now()));
+        write_cout!(@reply: console, Info, "generating route");
+        Ok(())
+    } else {
+        Err(CmdError::MissingArgs("targets"))
+    }
+}
+
+fn run_cmd_sv_route_add(
+    graph: &WeightedGraph,
+    route: &mut Option<(RouteGenerator, Instant)>,
+    console: &mut Console,
+    args: std::str::Split<'_, char>,
+) -> Result<(), CmdError> {
+    let (route, _) = route.as_mut().ok_or(CmdError::NoExistingRoute)?;
+    let target_iter = args.filter_map(|id| graph.find_vert(id).ok());
+    route.add_targets(console, target_iter);
+    write_cout!(@reply: console, Info, "extending route");
+    Ok(())
+}
+
+fn run_cmd_sv_new(
+    graph: &mut WeightedGraph,
+    route: &mut Option<(RouteGenerator, Instant)>,
+    camera: Camera3D,
+    console: &mut Console,
+    mut args: std::str::Split<'_, char>,
+) -> Result<(), CmdError> {
+    let id = args.next().ok_or(CmdError::CheckUsage(Cmd::CMD_SV_NEW))?;
+    let mut alias = args.next();
+    let coords = args.next().or_else(|| alias.take()).ok_or(CmdError::CheckUsage(Cmd::CMD_SV_NEW))?;
+    let pos = if coords == "focus" {
+        camera.target
+    } else {
+        parse_coords(coords).map_err(|e| CmdError::ParseCoordsFailed(e))?
+    };
+    graph.add_vertex(id, alias.unwrap_or(id), pos);
+    *route = None;
+    write_cout!(@reply: console, Info, "created new vertex");
+    Ok(())
+}
+
+fn run_cmd_sv_edge(
+    graph: &mut WeightedGraph,
+    route: &mut Option<(RouteGenerator, Instant)>,
+    console: &mut Console,
+    mut args: std::str::Split<'_, char>,
+) -> Result<(), CmdError> {
+    let a = args.next().ok_or(CmdError::CheckUsage(CMD_SV_EDGE))?;
+    let b = args.next().ok_or(CmdError::CheckUsage(CMD_SV_EDGE))?;
+    let a = graph.find_vert(a).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
+    let b = graph.find_vert(b).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
+    if graph.adjacent[a as usize].iter().any(|Adjacent { vertex, .. }| vertex == &b) {
+        write_cout!(@reply: console, Warning, "vertices {a} and {b} are already connected");
+    } else {
+        graph.add_edge(a, b);
+        *route = None;
+        write_cout!(@reply: console, Info, "created an edge connecting vertices {a} and {b}");
+    }
+    Ok(())
+}
+
+fn run_cmd_tempo(
+    console: &mut Console,
+    mut args: std::str::Split<'_, char>,
+    tempo_ticks: &mut u128,
+    tempo_ms: &mut u128,
+) -> Result<(), CmdError> {
+    if let Some(arg) = args.next() {
+        if arg == "reset" {
+            *tempo_ticks = 1;
+            *tempo_ms = 16;
+        } else if arg == "sprint" {
+            *tempo_ticks = 1;
+            *tempo_ms = 0;
+        } else if let Some((ticks, ms)) = arg.split_once('/') {
+            let ticks = ticks.parse().map_err(|e| CmdError::ParseTempoTicksFailed(e))?;
+            let ms = ms.parse().map_err(|e| CmdError::ParseTempoMillisecondsFailed(e))?;
+            (*tempo_ticks, *tempo_ms) = (ticks, ms);
+        } else {
+            return Err(CmdError::CheckUsage(CMD_TEMPO));
+        }
+        write_cout!(@reply: console, Info, "set tempo to {tempo_ticks} steps every {tempo_ms}ms");
+    } else {
+        write_cout!(@reply: console, Info, "current tempo is {tempo_ticks} steps every {tempo_ms}ms");
+    }
+    Ok(())
 }
