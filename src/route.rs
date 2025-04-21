@@ -1,5 +1,5 @@
 use std::{collections::VecDeque, time::Instant};
-use crate::{console::{console_debug, Console}, graph::{Adjacent, VertexID, WeightedGraph}};
+use crate::{console::{console_debug, Console}, console_write, graph::{Adjacent, VertexID, WeightedGraph}};
 
 pub enum Phase {
     None,
@@ -137,7 +137,7 @@ impl RouteGenerator {
                         }
                         *i += 1;
                     } else {
-                        console_debug!(console, Error, 0, "no route exists");
+                        console_write!(console, Error, "no route exists");
                         self.is_finished = true;
                     }
                 } else {

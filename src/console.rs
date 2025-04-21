@@ -425,8 +425,11 @@ impl Cmd {
             None => interactive_targets,
         };
 
-        let mut target_iter = targets.into_iter();
+        let mut target_iter = targets.into_iter().peekable();
         let start = target_iter.next().ok_or(CmdError::CheckUsage(Cmd::SvRoute))?;
+        if target_iter.peek().is_none() {
+            return Err(CmdError::MissingArgs("targets"));
+        }
         *route = Some(RouteGenerator::new(graph.verts.len(), start, target_iter));
         console_write!(console, Info, "generating route");
         Ok(true)
@@ -456,8 +459,10 @@ impl Cmd {
             },
             None => interactive_targets,
         };
-        let target_iter = targets.into_iter();
-        route.add_targets(console, target_iter);
+        if targets.is_empty() {
+            return Err(CmdError::MissingArgs("targets"));
+        }
+        route.add_targets(console, targets);
         console_write!(console, Info, "extending route");
         Ok(true)
     }

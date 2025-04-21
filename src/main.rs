@@ -170,6 +170,8 @@ fn main() {
     let mut interactive_targets = Vec::new();
     let mut is_giving_interactive_targets = false;
 
+    let mut mouse_tracking;
+
     let (mut rl, thread) = init()
         .title("VotV Route Tool")
         .resizable()
@@ -183,10 +185,27 @@ fn main() {
 
     let font = rl.load_font_from_memory(&thread, ".ttf", include_bytes!("resources/ShareTechMono-Regular.ttf"), 16, None).unwrap();
 
+    mouse_tracking = rl.get_mouse_position();
+
     'window: while !rl.window_should_close() {
+        let hovered_vert = graph.verts_iter()
+            .map(|(v, vert)| (v, get_ray_collision_sphere(rl.get_screen_to_world_ray(rl.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS)))
+            .filter(|(_, c)| c.hit)
+            .min_by(|(_, c1), (_, c2)| c1.distance.partial_cmp(&c2.distance).expect("vertices should not have `NaN` distance"))
+            .map(|(v, _)| v);
+
+        let mouse_snapped =
+            if let &Some(v) = &hovered_vert {
+                rl.get_world_to_screen(graph.verts[v as usize].pos, camera)
+            } else {
+                rl.get_mouse_position()
+            };
+
+        mouse_tracking = mouse_tracking.lerp(mouse_snapped, 1.0);
+
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
             is_giving_command = false;
-            console.command.clear();
+            // console.command.clear();
         }
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
             if !is_giving_command {
@@ -194,7 +213,7 @@ fn main() {
                 is_giving_command = true;
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
-                console.command.clear();
+                // console.command.clear();
             } else {
                 // finish giving command
                 if !console.command.is_empty() {
@@ -211,6 +230,9 @@ fn main() {
                                     Cmd::SvRoute => match Cmd::run_sv_route(&graph, &mut route, std::mem::take(&mut interactive_targets), &mut console, args) {
                                         Ok(is_ready) => {
                                             is_giving_interactive_targets = !is_ready;
+                                            if is_giving_interactive_targets {
+                                                is_giving_command = false;
+                                            }
                                             Ok(())
                                         },
                                         Err(e) => {
@@ -221,6 +243,9 @@ fn main() {
                                     Cmd::SvRouteAdd => match Cmd::run_sv_route_add(&graph, &mut route, std::mem::take(&mut interactive_targets), &mut console, args) {
                                         Ok(is_ready) => {
                                             is_giving_interactive_targets = !is_ready;
+                                            if is_giving_interactive_targets {
+                                                is_giving_command = false;
+                                            }
                                             Ok(())
                                         }
                                         Err(e) => {
@@ -314,12 +339,6 @@ fn main() {
         }
 
         if is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
-            let hovered_vert = graph.verts_iter()
-                .map(|(v, vert)| (v, get_ray_collision_sphere(rl.get_screen_to_world_ray(rl.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS)))
-                .filter(|(_, c)| c.hit)
-                .min_by(|(_, c1), (_, c2)| c1.distance.partial_cmp(&c2.distance).expect("vertices should not have `NaN` distance"))
-                .map(|(v, _)| v);
-
             if let Some(v) = hovered_vert {
                 if let Some(p) = interactive_targets.iter().position(|x| x == &v) {
                     console_write!(console, Info, "removing vertex {} from route", graph.verts[v as usize].id);
@@ -443,11 +462,8 @@ fn main() {
             // d.draw_grid(10, 100.0*SCALE_FACTOR);
         }
 
-        {
-            let mouse_pos = d.get_mouse_position();
-            d.draw_rectangle_rec(Rectangle::new(mouse_pos.x, 0.0, 3.0, d.get_render_height() as f32), Color::new(255, 255, 255, 32));
-            d.draw_rectangle_rec(Rectangle::new(0.0, mouse_pos.y, d.get_render_width() as f32, 3.0), Color::new(255, 255, 255, 32));
-        }
+        d.draw_rectangle_rec(Rectangle::new(mouse_tracking.x - 1.5, 0.0, 3.0, d.get_render_height() as f32), Color::new(255, 255, 255, 32));
+        d.draw_rectangle_rec(Rectangle::new(0.0, mouse_tracking.y - 1.5, d.get_render_width() as f32, 3.0), Color::new(255, 255, 255, 32));
 
         for (v, vert) in graph.verts_iter() {
             let pos = d.get_world_to_screen(vert.pos, camera);
