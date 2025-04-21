@@ -180,7 +180,7 @@ fn main() {
         45.0,
     );
 
-    let mut is_giving_command = false;
+    let mut is_giving_command = true;
     let mut command_history = VecDeque::new();
     let mut command_history_offset = 0;
     let mut console: Console = Console::new();
@@ -213,9 +213,9 @@ fn main() {
             console.command.clear();
         }
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
-            is_giving_command = !is_giving_command;
-            if is_giving_command {
+            if !is_giving_command {
                 // begin giving command
+                is_giving_command = true;
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
                 console.command.clear();
