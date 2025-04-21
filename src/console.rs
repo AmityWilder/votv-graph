@@ -1,6 +1,41 @@
-use std::{borrow::Cow, time::Instant};
+use std::{borrow::Cow, num::NonZeroU32};
 use raylib::prelude::*;
-use crate::{graph::{Adjacent, WeightedGraph}, route::RouteGenerator, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
+use crate::{graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
+
+pub enum Tempo {
+    Sync,
+    Sprint,
+    Instant,
+    Paused,
+    Exact {
+        ticks: NonZeroU32,
+        ms: NonZeroU32,
+    },
+}
+impl Default for Tempo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Tempo {
+    pub const fn new() -> Self {
+        Self::Exact {
+            ticks: unsafe { NonZeroU32::new_unchecked(1) },
+            ms: unsafe { NonZeroU32::new_unchecked(1) },
+        }
+    }
+}
+impl std::fmt::Display for Tempo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tempo::Sync => f.write_str("FPS sync"),
+            Tempo::Sprint => f.write_str("max responsive"),
+            Tempo::Instant => f.write_str("run in one frame"),
+            Tempo::Paused => f.write_str("paused"),
+            Tempo::Exact { ticks, ms } => write!(f, "{ticks} steps every {ms}ms"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsoleLineCategory {
@@ -215,13 +250,20 @@ define_commands!{
         #[input("sv.route")]
         #[usage(
             case(args("<START>", "<ID|ALIAS>..."), desc = "Generate the shortest route visiting each target (separated by spaces)"),
-            case(args("interactive"),              desc = "Provide targets to the route generator through the graphic interface"),
+            case(args("-i|interactive"),           desc = "Provide targets to the route generator through the graphic interface"),
         )]
         SvRoute,
 
         #[input("sv.route.add")]
-        #[usage(case(args("<ID|ALIAS>..."), desc = "Add more targets (separated by spaces) to the current route"))]
+        #[usage(
+            case(args("<ID|ALIAS>..."),  desc = "Add more targets (separated by spaces) to the current route"),
+            case(args("-i|interactive"), desc = "Add more targets to the current route through the graphic interface"),
+        )]
         SvRouteAdd,
+
+        #[input("sv.route.clear")]
+        #[usage(case(args(), desc = "Clear the ongoing route"))]
+        SvRouteClear,
 
         #[input("sv.new")]
         #[usage(
@@ -240,7 +282,8 @@ define_commands!{
         #[input("tempo")]
         #[usage(
             case(args("<TICKS>/<MILLISECONDS>"), desc = "Set the route tick speed in ticks per milliseconds"),
-            case(args("reset"),                  desc = "Set the route tick speed to the default (1 step per frame)"),
+            case(args("reset"),                  desc = "Set the route tick speed to the default (1 step per millisecond)"),
+            case(args("sync"),                   desc = "Sync the route tick speed with the framerate"),
             case(args("sprint"),                 desc = "Set the route tick speed to the maximum (1 step every 0 milliseconds)"),
             case(args(),                         desc = "Print the current tempo"),
         )]
@@ -336,7 +379,7 @@ impl Cmd {
                 item.args().into_iter().copied()
                     .map(move |args| (item.input(), args))
             )
-            .map(|(input, args)| format!("<color=rgb(0, 150, 230)>{input}</color> <color=rgb(0, 120, 185)>{args}</color>"))
+            .map(|(input, args)| format!("<color=rgb(0, 150, 230)>{input}</color><color=rgb(0, 120, 185)>{args}</color>"))
             .collect::<Vec<_>>();
 
         let width = usages.iter()
@@ -360,48 +403,68 @@ impl Cmd {
 
     pub fn run_sv_route(
         graph: &WeightedGraph,
-        route: &mut Option<(RouteGenerator, Instant)>,
+        route: &mut Option<RouteGenerator>,
+        interactive_targets: Vec<VertexID>,
         console: &mut Console,
         args: std::str::Split<'_, char>,
-    ) -> Result<(), CmdError> {
-        let mut target_iter = args.map(|id| graph.find_vert(id));
+    ) -> Result<bool, CmdError> {
+        let mut args = args.peekable();
+        let targets = match args.peek() {
+            Some(&("-i" | "interactive")) => {
+                console_write!(console, Info, "click each target with the mouse; order doesn't matter except that the first will be the start");
+                console_write!(console, Info, "click a target again to un-target it");
+                console_write!(console, Info, "run the command `<color=rgb(0, 150, 230)>sv.route</color>` (without arguments) when finished");
+                console.command.push_str("sv.route");
+                return Ok(false);
+            }
+            Some(_) => {
+                args
+                    .map(|id| graph.find_vert(id).map_err(|start| CmdError::VertexDNE(start.to_string())))
+                    .collect::<Result<Vec<VertexID>, CmdError>>()?
+            },
+            None => interactive_targets,
+        };
 
-        let start = target_iter.next()
-            .ok_or(CmdError::CheckUsage(Cmd::SvRoute))?
-            .map_err(|start| CmdError::VertexDNE(start.to_string()))?;
-
-        let mut target_iter = target_iter
-            .filter_map(|v| {
-                v.inspect(|v| console_write!(console, Info, "adding vertex {v} to targets"))
-                .inspect_err(|id| console_write!(console, Warning, "vertex \"{id}\" does not exist, ignoring"))
-                .ok()
-            })
-            .peekable();
-        if target_iter.peek().is_some() {
-            *route = Some((RouteGenerator::new(graph.verts.len(), start, target_iter), Instant::now()));
-            console_write!(console, Info, "generating route");
-            Ok(())
-        } else {
-            Err(CmdError::MissingArgs("targets"))
-        }
+        let mut target_iter = targets.into_iter();
+        let start = target_iter.next().ok_or(CmdError::CheckUsage(Cmd::SvRoute))?;
+        *route = Some(RouteGenerator::new(graph.verts.len(), start, target_iter));
+        console_write!(console, Info, "generating route");
+        Ok(true)
     }
 
     pub fn run_sv_route_add(
         graph: &WeightedGraph,
-        route: &mut Option<(RouteGenerator, Instant)>,
+        route: &mut Option<RouteGenerator>,
+        interactive_targets: Vec<VertexID>,
         console: &mut Console,
         args: std::str::Split<'_, char>,
-    ) -> Result<(), CmdError> {
-        let (route, _) = route.as_mut().ok_or(CmdError::NoExistingRoute)?;
-        let target_iter = args.filter_map(|id| graph.find_vert(id).ok());
+    ) -> Result<bool, CmdError> {
+        let route = route.as_mut().ok_or(CmdError::NoExistingRoute)?;
+        let mut args = args.peekable();
+        let targets = match args.peek() {
+            Some(&("-i" | "interactive")) => {
+                console_write!(console, Info, "click each target with the mouse; order doesn't matter");
+                console_write!(console, Info, "click a target again to un-target it");
+                console_write!(console, Info, "run the command `<color=rgb(0, 150, 230)>sv.route.add</color>` (without arguments) when finished");
+                console.command.push_str("sv.route.add");
+                return Ok(false);
+            }
+            Some(_) => {
+                args
+                    .map(|id| graph.find_vert(id).map_err(|start| CmdError::VertexDNE(start.to_string())))
+                    .collect::<Result<Vec<VertexID>, CmdError>>()?
+            },
+            None => interactive_targets,
+        };
+        let target_iter = targets.into_iter();
         route.add_targets(console, target_iter);
         console_write!(console, Info, "extending route");
-        Ok(())
+        Ok(true)
     }
 
     pub fn run_sv_new(
         graph: &mut WeightedGraph,
-        route: &mut Option<(RouteGenerator, Instant)>,
+        route: &mut Option<RouteGenerator>,
         camera: Camera3D,
         console: &mut Console,
         mut args: std::str::Split<'_, char>,
@@ -422,7 +485,7 @@ impl Cmd {
 
     pub fn run_sv_edge(
         graph: &mut WeightedGraph,
-        route: &mut Option<(RouteGenerator, Instant)>,
+        route: &mut Option<RouteGenerator>,
         console: &mut Console,
         mut args: std::str::Split<'_, char>,
     ) -> Result<(), CmdError> {
@@ -443,26 +506,29 @@ impl Cmd {
     pub fn run_tempo(
         console: &mut Console,
         mut args: std::str::Split<'_, char>,
-        tempo_ticks: &mut u128,
-        tempo_ms: &mut u128,
+        tempo: &mut Tempo,
     ) -> Result<(), CmdError> {
         if let Some(arg) = args.next() {
             if arg == "reset" {
-                *tempo_ticks = 1;
-                *tempo_ms = 16;
+                *tempo = Tempo::new();
+            } else if arg == "sync" {
+                *tempo = Tempo::Sync;
             } else if arg == "sprint" {
-                *tempo_ticks = 1;
-                *tempo_ms = 0;
+                *tempo = Tempo::Sprint;
             } else if let Some((ticks, ms)) = arg.split_once('/') {
-                let ticks = ticks.parse().map_err(|e| CmdError::ParseTempoTicksFailed(e))?;
-                let ms = ms.parse().map_err(|e| CmdError::ParseTempoMillisecondsFailed(e))?;
-                (*tempo_ticks, *tempo_ms) = (ticks, ms);
+                let ticks = NonZeroU32::new(ticks.parse().map_err(|e| CmdError::ParseTempoTicksFailed(e))?);
+                let ms = NonZeroU32::new(ms.parse().map_err(|e| CmdError::ParseTempoMillisecondsFailed(e))?);
+                *tempo = match (ticks, ms) {
+                    (None, _) => Tempo::Paused,
+                    (Some(_), None) => Tempo::Instant,
+                    (Some(ticks), Some(ms)) => Tempo::Exact { ticks, ms },
+                };
             } else {
                 return Err(CmdError::CheckUsage(Cmd::Tempo));
             }
-            console_write!(console, Info, "set tempo to {tempo_ticks} steps every {tempo_ms}ms");
+            console_write!(console, Info, "set tempo to {tempo}");
         } else {
-            console_write!(console, Info, "current tempo is {tempo_ticks} steps every {tempo_ms}ms");
+            console_write!(console, Info, "current tempo is {tempo}");
         }
         Ok(())
     }
@@ -537,6 +603,33 @@ impl<'a> Iterator for Enrich<'a> {
             } else {
                 None
             }
+        }
+    }
+}
+
+pub fn pop_word(s: &mut String) {
+    let st = s.trim_end();
+    if let Some(last_char) = st.chars().last() {
+        let new_len = if last_char.is_alphanumeric() || last_char == '_' {
+            st.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()
+        } else if last_char == ']' {
+            let trimmed = st.trim_end_matches(']');
+            let len = trimmed.len();
+            if trimmed.ends_with('[') { len - 1 } else { len }
+        } else if last_char == ')' {
+            let trimmed = st.trim_end_matches(')');
+            let len = trimmed.len();
+            if trimmed.ends_with('{') { len - 1 } else { len }
+        } else if last_char == '}' {
+            let trimmed = st.trim_end_matches('}');
+            let len = trimmed.len();
+            if trimmed.ends_with('{') { len - 1 } else { len }
+        } else {
+            st.trim_end_matches(last_char).len()
+        };
+
+        while s.len() > new_len {
+            s.pop();
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
+use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
-use console::{console_write, Cmd, Console, ConsoleLineCategory, ConsoleLineRef, EnrichEx};
+use console::{console_write, pop_word, Cmd, Console, ConsoleLineCategory, ConsoleLineRef, EnrichEx, Tempo};
 use graph::{define_edges, define_verts, WeightedGraph};
 use raylib::prelude::*;
 use route::{Phase, Visit};
@@ -21,33 +22,6 @@ impl MeasureTextEx for RaylibHandle {}
 
 const VERTEX_RADIUS: f32 = 8.0;
 const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
-
-fn pop_word(s: &mut String) {
-    let st = s.trim_end();
-    if let Some(last_char) = st.chars().last() {
-        let new_len = if last_char.is_alphanumeric() || last_char == '_' {
-            st.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()
-        } else if last_char == ']' {
-            let trimmed = st.trim_end_matches(']');
-            let len = trimmed.len();
-            if trimmed.ends_with('[') { len - 1 } else { len }
-        } else if last_char == ')' {
-            let trimmed = st.trim_end_matches(')');
-            let len = trimmed.len();
-            if trimmed.ends_with('{') { len - 1 } else { len }
-        } else if last_char == '}' {
-            let trimmed = st.trim_end_matches('}');
-            let len = trimmed.len();
-            if trimmed.ends_with('{') { len - 1 } else { len }
-        } else {
-            st.trim_end_matches(last_char).len()
-        };
-
-        while s.len() > new_len {
-            s.pop();
-        }
-    }
-}
 
 fn main() {
     define_verts!{
@@ -186,13 +160,15 @@ fn main() {
     let mut console: Console = Console::new();
     let mut is_debugging = false;
 
-    let mut tempo_ticks = 1;
-    let mut tempo_ms = 16;
+    let mut tempo = Tempo::new();
 
     let mut is_cursor_shown = false;
     let mut cursor_last_toggled = Instant::now();
 
     let mut backspace_pressed = None;
+
+    let mut interactive_targets = Vec::new();
+    let mut is_giving_interactive_targets = false;
 
     let (mut rl, thread) = init()
         .title("VotV Route Tool")
@@ -232,11 +208,33 @@ fn main() {
                             Ok(cmd) => {
                                 let result = match cmd {
                                     Cmd::Help => Ok(Cmd::run_help(&mut console)),
-                                    Cmd::SvRoute => Cmd::run_sv_route(&graph, &mut route, &mut console, args),
-                                    Cmd::SvRouteAdd => Cmd::run_sv_route_add(&graph, &mut route, &mut console, args),
+                                    Cmd::SvRoute => match Cmd::run_sv_route(&graph, &mut route, std::mem::take(&mut interactive_targets), &mut console, args) {
+                                        Ok(is_ready) => {
+                                            is_giving_interactive_targets = !is_ready;
+                                            Ok(())
+                                        },
+                                        Err(e) => {
+                                            is_giving_interactive_targets = false;
+                                            Err(e)
+                                        }
+                                    }
+                                    Cmd::SvRouteAdd => match Cmd::run_sv_route_add(&graph, &mut route, std::mem::take(&mut interactive_targets), &mut console, args) {
+                                        Ok(is_ready) => {
+                                            is_giving_interactive_targets = !is_ready;
+                                            Ok(())
+                                        }
+                                        Err(e) => {
+                                            is_giving_interactive_targets = false;
+                                            Err(e)
+                                        }
+                                    }
+                                    Cmd::SvRouteClear => {
+                                        route = None;
+                                        Ok(console_write!(console, Info, "route cleared"))
+                                    },
                                     Cmd::SvNew => Cmd::run_sv_new(&mut graph, &mut route, camera, &mut console, args),
                                     Cmd::SvEdge => Cmd::run_sv_edge(&mut graph, &mut route, &mut console, args),
-                                    Cmd::Tempo => Cmd::run_tempo(&mut console, args, &mut tempo_ticks, &mut tempo_ms),
+                                    Cmd::Tempo => Cmd::run_tempo(&mut console, args, &mut tempo),
                                     Cmd::Dbg => {
                                         is_debugging = !is_debugging;
                                         Ok(console_write!(console, Info, "debugging is now {}", if is_debugging { "on" } else { "off" }))
@@ -315,23 +313,52 @@ fn main() {
             camera.target += pan;
         }
 
-        if let Some((route, last_step)) = &mut route {
-            if !route.is_finished {
-                if let Some(tempo_ms) = std::num::NonZeroU128::new(tempo_ms) {
-                    let ms_elapsed = last_step.elapsed().as_millis();
-                    let ticks = tempo_ticks * ms_elapsed/tempo_ms;
-                    println!("tempo_ticks: {tempo_ticks} tempo_ms: {tempo_ms} ms_elapsed: {ms_elapsed} ticks: {ticks}");
-                    for _ in 0..ticks {
-                        if route.is_finished { break; }
-                        route.step(&mut console, &graph);
-                        *last_step = Instant::now();
-                    }
+        if is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
+            let hovered_vert = graph.verts_iter()
+                .map(|(v, vert)| (v, get_ray_collision_sphere(rl.get_screen_to_world_ray(rl.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS)))
+                .filter(|(_, c)| c.hit)
+                .min_by(|(_, c1), (_, c2)| c1.distance.partial_cmp(&c2.distance).expect("vertices should not have `NaN` distance"))
+                .map(|(v, _)| v);
+
+            if let Some(v) = hovered_vert {
+                if let Some(p) = interactive_targets.iter().position(|x| x == &v) {
+                    console_write!(console, Info, "removing vertex {} from route", graph.verts[v as usize].id);
+                    interactive_targets.remove(p);
                 } else {
-                    while !route.is_finished {
+                    console_write!(console, Info, "adding vertex {} to route", graph.verts[v as usize].id);
+                    interactive_targets.push(v);
+                }
+            }
+        }
+
+        if let Some(route) = &mut route {
+            if !route.is_finished {
+                match &tempo {
+                    Tempo::Sync => {
                         route.step(&mut console, &graph);
-                        *last_step = Instant::now();
                     }
-                };
+                    Tempo::Sprint => {
+                        let target_duration = Duration::from_secs_f32(0.5/rl.get_fps() as f32);
+                        let start = Instant::now();
+                        while !route.is_finished && start.elapsed() < target_duration {
+                            route.step(&mut console, &graph);
+                        }
+                    }
+                    Tempo::Instant => {
+                        while !route.is_finished {
+                            route.step(&mut console, &graph);
+                        }
+                    }
+                    Tempo::Paused => {}
+                    Tempo::Exact { ticks, ms } => {
+                        let ms_elapsed = route.last_step.elapsed().as_millis();
+                        let ticks = ticks.get() as u128*ms_elapsed/(NonZeroU128::from(*ms));
+                        for _ in 0..ticks {
+                            if route.is_finished { break; }
+                            route.step(&mut console, &graph);
+                        }
+                    }
+                }
             }
         }
 
@@ -358,8 +385,8 @@ fn main() {
 
             for (v, vert) in graph.verts_iter() {
                 let distance_from_target = vert.pos - camera.target;
-                let color = loop {
-                    if let Some((route, _)) = &route {
+                let mut color = loop {
+                    if let Some(route) = &route {
                         if let Phase::Edge { current, i } = &route.phase {
                             if &v == current {
                                 break Color::SKYBLUE;
@@ -375,23 +402,35 @@ fn main() {
                             break Color::GREEN;
                         }
                     }
-                    let dist_sqr = distance_from_target.dot(distance_from_target);
-                    if dist_sqr <= VERTEX_RADIUS*VERTEX_RADIUS {
-                        break Color::new(255, 128, 128, 255);
-                    } else {
-                        break Color::RED;
-                    }
+                    break Color::RED;
                 };
+
+                if is_giving_interactive_targets {
+                    let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS).hit;
+                    if is_hovered {
+                        color = color.brightness(0.45);
+                    }
+                    let is_targeted = interactive_targets.contains(&v);
+                    if is_targeted {
+                        color = color.brightness(0.35);
+                    }
+                } else {
+                    let is_focused = distance_from_target.dot(distance_from_target) <= VERTEX_RADIUS*VERTEX_RADIUS;
+                    if is_focused {
+                        color = color.brightness(0.45);
+                    }
+                }
+
                 let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
                 d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, resolution, resolution, color);
-                if let Some((route, _)) = &route {
+                if let Some(route) = &route {
                     if let Some(Visit { parent: Some(p), .. }) = route.visited[v as usize] {
                         d.draw_capsule(graph.verts[p as usize].pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
                     }
                 }
             }
 
-            if let Some((route, _)) = &route {
+            if let Some(route) = &route {
                 for pair in route.result.windows(2) {
                     let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
                     d.draw_capsule(graph.verts[*a as usize].pos*SCALE_FACTOR, graph.verts[*b as usize].pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
@@ -415,7 +454,7 @@ fn main() {
             let text = vert.alias.as_str();
             let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
             d.draw_text_ex(&font, text, pos - rvec2(text_size.x*0.5, font.baseSize/2), font.baseSize as f32, 0.0, Color::WHITE);
-            if let Some((route, _)) = &route {
+            if let Some(route) = &route {
                 if let Some(Visit { distance, parent }) = route.visited[v as usize] {
                     let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].alias);
                     let text = format!("{} ({parent_text})", distance.ceil());

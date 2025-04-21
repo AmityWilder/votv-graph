@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, time::Instant};
 use crate::{console::{console_debug, Console}, graph::{Adjacent, VertexID, WeightedGraph}};
 
 pub enum Phase {
@@ -33,6 +33,7 @@ pub struct RouteGenerator {
     pub queue: VecDeque<VertexID>,
     pub phase: Phase,
     pub is_finished: bool,
+    pub last_step: Instant,
 }
 
 impl RouteGenerator {
@@ -45,6 +46,7 @@ impl RouteGenerator {
             queue: VecDeque::new(),
             phase: Phase::None,
             is_finished: false,
+            last_step: Instant::now(),
         }
     }
 
@@ -179,5 +181,6 @@ impl RouteGenerator {
                 }
             }
         }
+        self.last_step = Instant::now();
     }
 }
