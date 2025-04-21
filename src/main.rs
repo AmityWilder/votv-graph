@@ -484,7 +484,7 @@ fn main() {
         if !is_giving_command {
             d.draw_text_ex(
                 &font,
-                "use WASD to pan and RFZX to orbit",
+                "use W/A/S/D to pan, Q/E to zoom, and R/F/Z/X to orbit",
                 rvec2(0, d.get_render_height() - font.baseSize*3),
                 font.baseSize as f32,
                 0.0,
