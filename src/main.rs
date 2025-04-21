@@ -308,11 +308,11 @@ fn main() {
                     }
                 }
             } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
-                command_history_offset = dbg!(if command_history_offset + 1 < command_history.len() + 1 { command_history_offset + 1 } else { 0 });
-                console.command = dbg!(command_history.get(dbg!(command_history_offset)).cloned().unwrap_or_default());
+                command_history_offset = if command_history_offset + 1 < command_history.len() + 1 { command_history_offset + 1 } else { 0 };
+                console.command = command_history.get(command_history_offset).cloned().unwrap_or_default();
             } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
-                command_history_offset = dbg!(command_history_offset.checked_sub(1).unwrap_or(command_history.len() + 1 - 1));
-                console.command = dbg!(command_history.get(dbg!(command_history_offset)).cloned().unwrap_or_default());
+                command_history_offset = command_history_offset.checked_sub(1).unwrap_or(command_history.len() + 1 - 1);
+                console.command = command_history.get(command_history_offset).cloned().unwrap_or_default();
             } else {
                 force_blink = false;
             }
