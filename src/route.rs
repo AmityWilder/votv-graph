@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, time::Instant};
 use crate::{console::{console_debug, Console}, console_write, graph::{Adjacent, VertexID, WeightedGraph}};
 
+#[derive(Debug, Clone)]
 pub enum Phase {
     None,
     Edge {
@@ -25,6 +26,7 @@ pub struct Visit {
     pub parent: Option<VertexID>,
 }
 
+#[derive(Debug)]
 pub struct RouteGenerator {
     pub targets: Vec<VertexID>,
     pub result: Vec<VertexID>,

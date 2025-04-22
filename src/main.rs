@@ -1,16 +1,21 @@
-use std::collections::VecDeque;
+#![feature(reentrant_lock)]
+
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
-use console::{console_write, pop_word, Cmd, Console, ConsoleLineCategory, ConsoleLineRef, EnrichEx, Tempo};
+use command::{pop_word, Cmd, EnrichEx};
+use console::{cin, console_write, cout, Category, ConsoleLineRef};
 use graph::{define_edges, define_verts, WeightedGraph};
 use raylib::prelude::*;
 use route::{Phase, Visit};
+use tempo::Tempo;
 
-pub mod console;
-pub mod graph;
-pub mod route;
+mod tempo;
+mod console;
+mod command;
+mod graph;
+mod route;
 
-pub trait MeasureTextEx {
+pub(crate) trait MeasureTextEx {
     #[inline]
     #[must_use]
     fn measure_text_ex(&self, font: impl AsRef<ffi::Font>, text: &str, font_size: f32, spacing: f32) -> Vector2 {
@@ -155,9 +160,6 @@ fn main() {
     );
 
     let mut is_giving_command = true;
-    let mut command_history = VecDeque::new();
-    let mut command_history_offset = 0;
-    let mut console: Console = Console::new();
     let mut is_debugging = false;
 
     let mut tempo = Tempo::new();
@@ -216,12 +218,12 @@ fn main() {
                 // console.command.clear();
             } else {
                 // finish giving command
-                if !console.command.is_empty() {
+                if !cin().borrow().command().is_empty() {
                     command_history.push_front(std::mem::take(&mut console.command));
                     command_history_offset = command_history.len();
                     let mut args = command_history.front().unwrap().split(' ');
 
-                    console.reply.clear();
+                    cout().borrow_mut().clear();
                     if let Some(cmd) = args.next() {
                         match Cmd::try_from_str(cmd) {
                             Ok(cmd) => {
@@ -527,13 +529,11 @@ fn main() {
                 .chain(is_debugging.then(|| console.debug.iter().map(|item| item.as_line_ref())).into_iter().flatten());
 
             for item in console_iter {
-                use ConsoleLineCategory::*;
+                use Category::*;
                 let (color, prefix, suffix) = match item.cat {
                     Route => (Color::RAYWHITE,  "route: ", ""),
                     Ghost => (Color::LIGHTBLUE.alpha(0.5), ">", ""),
                     Command => (Color::LIGHTBLUE, ">", if is_giving_command && is_cursor_shown { "_" } else { "" }),
-                    TargetList => (Color::LIME, "targets: ", ""),
-                    Trace => (Color::DARKGRAY, "trace: ", ""),
                     Debug if is_debugging => (Color::MAGENTA, "debug: ", ""),
                     Debug => continue,
                     Info => (Color::LIGHTGRAY, "", ""),

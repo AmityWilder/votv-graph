@@ -21,7 +21,6 @@ impl Vertex {
 
 #[derive(Debug, Clone)]
 pub struct Edge {
-    pub id: Option<String>,
     pub adj: [VertexID; 2],
     pub weight: f32,
 }
@@ -72,7 +71,6 @@ impl WeightedGraph {
     pub fn add_edge(&mut self, a: VertexID, b: VertexID) {
         let weight = self.verts[a as usize].pos.distance_to(self.verts[b as usize].pos);
         self.edges.push(Edge {
-            id: None,
             adj: [a, b],
             weight,
         });
@@ -110,7 +108,6 @@ macro_rules! define_edges {
     ($name:ident: $($a:ident--$b:ident),* $(,)?) => {
         let $name = vec![$(
             $crate::graph::Edge {
-                id: None,
                 adj: [$a.id(), $b.id()],
                 weight: $a.distance_to($b),
             },
