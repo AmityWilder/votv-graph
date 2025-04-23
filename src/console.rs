@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::VecDeque, sync::{LazyLock, LockResult, ReentrantLock, ReentrantLockGuard, RwLock, RwLockReadGuard, RwLockWriteGuard}};
+use std::{collections::VecDeque, sync::{Mutex, MutexGuard}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -98,7 +98,7 @@ struct ConsoleIn {
     offset: usize,
 }
 impl ConsoleIn {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             buf: VecDeque::new(),
             offset: 0,
@@ -136,7 +136,7 @@ struct ConsoleOut {
     buf: Vec<ConsoleLine>,
 }
 impl ConsoleOut {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             buf: Vec::new(),
         }
@@ -156,7 +156,7 @@ struct ConsoleDebug {
     buf: Vec<ConsoleLine>,
 }
 impl ConsoleDebug {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             buf: Vec::new(),
         }
@@ -177,35 +177,100 @@ impl ConsoleDebug {
     }
 }
 
-static CIN:  LazyLock<ReentrantLock<RefCell<ConsoleIn>>>    = LazyLock::new(|| ReentrantLock::new(RefCell::new(ConsoleIn   ::new())));
-static COUT: LazyLock<ReentrantLock<RefCell<ConsoleOut>>>   = LazyLock::new(|| ReentrantLock::new(RefCell::new(ConsoleOut  ::new())));
-static CDBG: LazyLock<ReentrantLock<RefCell<ConsoleDebug>>> = LazyLock::new(|| ReentrantLock::new(RefCell::new(ConsoleDebug::new())));
+static CIN:  Mutex<ConsoleIn>    = Mutex::new(ConsoleIn   ::new());
+static COUT: Mutex<ConsoleOut>   = Mutex::new(ConsoleOut  ::new());
+static CDBG: Mutex<ConsoleDebug> = Mutex::new(ConsoleDebug::new());
 
-pub fn cin() -> ReentrantLockGuard<'static, RefCell<ConsoleIn>> {
-    CIN.lock()
+pub struct CIn {
+    inner: &'static Mutex<ConsoleIn>,
 }
-pub fn cout() -> ReentrantLockGuard<'static, RefCell<ConsoleOut>> {
-    COUT.lock()
+pub struct CInLock<'a> {
+    inner: MutexGuard<'a, ConsoleIn>,
 }
-pub fn cdbg() -> ReentrantLockGuard<'static, RefCell<ConsoleDebug>> {
-    CDBG.lock()
+impl CIn {
+    pub fn lock(&self) -> CInLock<'_> {
+        CInLock {
+            inner: self.inner.lock().unwrap()
+        }
+    }
+}
+impl std::io::Write for CIn {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        todo!()
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        todo!()
+    }
 }
 
-macro_rules! console_write {
-    ($cons:expr, $level:ident, $($args:tt)+) => {
-        $cons.reply(
-            $crate::console::ConsoleLineCategory::$level,
-            format_args!($($args)+),
-        )
-    };
+pub struct COut {
+    inner: &'static Mutex<ConsoleOut>,
 }
-macro_rules! console_debug {
-    ($cons:expr, $level:ident, $depth:expr, $($args:tt)+) => {
-        $cons.debug(
-            $crate::console::ConsoleLineCategory::$level,
-            $depth,
-            format_args!($($args)+),
-        )
-    };
+pub struct COutLock<'a> {
+    inner: MutexGuard<'a, ConsoleOut>,
 }
-pub(crate) use {console_write, console_debug};
+impl COut {
+    pub fn lock(&self) -> COutLock<'_> {
+        COutLock { inner: self.inner.lock().unwrap() }
+    }
+}
+impl std::io::Write for COut {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        todo!()
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        todo!()
+    }
+}
+
+pub struct CDbg {
+    inner: &'static Mutex<ConsoleDebug>,
+}
+pub struct CDbgLock<'a> {
+    inner: MutexGuard<'a, ConsoleDebug>,
+}
+impl CDbg {
+    pub fn lock(&self) -> CDbgLock<'_> {
+        CDbgLock { inner: self.inner.lock().unwrap() }
+    }
+}
+impl std::io::Write for CDbg {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        todo!()
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        todo!()
+    }
+}
+
+pub fn cin() -> CIn {
+    CIn { inner: &CIN }
+}
+pub fn cout() -> COut {
+    COut { inner: &COUT }
+}
+pub fn cdbg() -> CDbg {
+    CDbg { inner: &CDBG }
+}
+
+// macro_rules! console_write {
+//     ($cons:expr, $level:ident, $($args:tt)+) => {
+//         $cons.reply(
+//             $crate::console::ConsoleLineCategory::$level,
+//             format_args!($($args)+),
+//         )
+//     };
+// }
+// macro_rules! console_debug {
+//     ($cons:expr, $level:ident, $depth:expr, $($args:tt)+) => {
+//         $cons.debug(
+//             $crate::console::ConsoleLineCategory::$level,
+//             $depth,
+//             format_args!($($args)+),
+//         )
+//     };
+// }
+// pub(crate) use {console_write, console_debug};

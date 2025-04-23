@@ -1,5 +1,3 @@
-#![feature(reentrant_lock)]
-
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
 use command::{pop_word, Cmd, EnrichEx};
