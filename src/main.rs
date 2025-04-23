@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 use console::{console_write, pop_word, Cmd, Console, ConsoleLineCategory, ConsoleLineRef, EnrichEx, Tempo};
 use graph::{define_edges, define_verts, WeightedGraph};
 use raylib::prelude::*;
-use route::{Phase, Visit};
+use route::{VertexClass, Visit};
 
+pub mod serialization;
 pub mod console;
 pub mod graph;
 pub mod route;
@@ -196,7 +197,7 @@ fn main() {
 
         let mouse_snapped =
             if let &Some(v) = &hovered_vert {
-                rl.get_world_to_screen(graph.verts[v as usize].pos, camera)
+                rl.get_world_to_screen(graph.vert(v).pos, camera)
             } else {
                 rl.get_mouse_position()
             };
@@ -341,41 +342,45 @@ fn main() {
         if is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
             if let Some(v) = hovered_vert {
                 if let Some(p) = interactive_targets.iter().position(|x| x == &v) {
-                    console_write!(console, Info, "removing vertex {} from route", graph.verts[v as usize].id);
+                    console_write!(console, Info, "removing vertex {} from route", graph.vert(v).id);
                     interactive_targets.remove(p);
                 } else {
-                    console_write!(console, Info, "adding vertex {} to route", graph.verts[v as usize].id);
+                    console_write!(console, Info, "adding vertex {} to route", graph.vert(v).id);
                     interactive_targets.push(v);
                 }
             }
         }
 
         if let Some(route) = &mut route {
-            if !route.is_finished {
-                match &tempo {
-                    Tempo::Sync => {
+            match &tempo {
+                Tempo::Sync => {
+                    if !route.is_finished() {
                         route.step(&mut console, &graph);
                     }
-                    Tempo::Sprint => {
-                        let target_duration = Duration::from_secs_f32(0.5/rl.get_fps() as f32);
-                        let start = Instant::now();
-                        while !route.is_finished && start.elapsed() < target_duration {
-                            route.step(&mut console, &graph);
-                        }
+                }
+
+                Tempo::Sprint => {
+                    let target_duration = Duration::from_secs_f32(0.5/rl.get_fps() as f32);
+                    let start = Instant::now();
+                    while !route.is_finished() && start.elapsed() < target_duration {
+                        route.step(&mut console, &graph);
                     }
-                    Tempo::Instant => {
-                        while !route.is_finished {
-                            route.step(&mut console, &graph);
-                        }
+                }
+
+                Tempo::Instant => {
+                    while !route.is_finished() {
+                        route.step(&mut console, &graph);
                     }
-                    Tempo::Paused => {}
-                    Tempo::Exact { ticks, ms } => {
-                        let ms_elapsed = route.last_step.elapsed().as_millis();
-                        let ticks = ticks.get() as u128*ms_elapsed/(NonZeroU128::from(*ms));
-                        for _ in 0..ticks {
-                            if route.is_finished { break; }
-                            route.step(&mut console, &graph);
-                        }
+                }
+
+                Tempo::Paused => {}
+
+                Tempo::Exact { ticks, ms } => {
+                    let ms_elapsed = route.last_step_elapsed().as_millis();
+                    let ticks = ticks.get() as u128*ms_elapsed/(NonZeroU128::from(*ms));
+                    for _ in 0..ticks {
+                        if route.is_finished() { break; }
+                        route.step(&mut console, &graph);
                     }
                 }
             }
@@ -395,34 +400,25 @@ fn main() {
                 camera
             });
 
-            for edge in &graph.edges {
-                let [i, j] = edge.adj.map(usize::from);
-                let p0 = graph.verts[i].pos;
-                let p1 = graph.verts[j].pos;
+            for edge in graph.edges() {
+                let [i, j] = edge.adj;
+                let p0 = graph.vert(i).pos;
+                let p1 = graph.vert(j).pos;
                 d.draw_capsule(p0*SCALE_FACTOR, p1*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::RED.alpha(0.25));
             }
 
             for (v, vert) in graph.verts_iter() {
                 let distance_from_target = vert.pos - camera.target;
-                let mut color = loop {
-                    if let Some(route) = &route {
-                        if let Phase::Edge { current, i } = &route.phase {
-                            if &v == current {
-                                break Color::SKYBLUE;
-                            } else if graph.adjacent[*current as usize].get(*i).is_some_and(|x| &v == &x.vertex) {
-                                break Color::ORANGE;
-                            }
-                        }
-                        if !route.is_finished && v == route.root {
-                            break Color::BLUE;
-                        } else if route.result.contains(&v) {
-                            break Color::BLUEVIOLET;
-                        } else if route.targets.contains(&v) {
-                            break Color::GREEN;
-                        }
+                let mut color = route.as_ref().and_then(|route| route.classify(&graph, v)).map_or(
+                    Color::RED,
+                    |c| match c {
+                        VertexClass::Current => Color::SKYBLUE,
+                        VertexClass::Adjacent => Color::ORANGE,
+                        VertexClass::Root => Color::BLUE,
+                        VertexClass::Result => Color::BLUEVIOLET,
+                        VertexClass::Target => Color::GREEN,
                     }
-                    break Color::RED;
-                };
+                );
 
                 if is_giving_interactive_targets {
                     let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS).hit;
@@ -443,16 +439,16 @@ fn main() {
                 let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
                 d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, resolution, resolution, color);
                 if let Some(route) = &route {
-                    if let Some(Visit { parent: Some(p), .. }) = route.visited[v as usize] {
-                        d.draw_capsule(graph.verts[p as usize].pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
+                    if let Some(Visit { parent: Some(p), .. }) = route.get_visit(v) {
+                        d.draw_capsule(graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
                     }
                 }
             }
 
             if let Some(route) = &route {
-                for pair in route.result.windows(2) {
+                for pair in route.result().windows(2) {
                     let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
-                    d.draw_capsule(graph.verts[*a as usize].pos*SCALE_FACTOR, graph.verts[*b as usize].pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                    d.draw_capsule(graph.vert(*a).pos*SCALE_FACTOR, graph.vert(*b).pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
                 }
             }
 
@@ -471,8 +467,8 @@ fn main() {
             let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
             d.draw_text_ex(&font, text, pos - rvec2(text_size.x*0.5, font.baseSize/2), font.baseSize as f32, 0.0, Color::WHITE);
             if let Some(route) = &route {
-                if let Some(Visit { distance, parent }) = route.visited[v as usize] {
-                    let parent_text = parent.map_or("-", |p| &graph.verts[p as usize].alias);
+                if let Some(Visit { distance, parent }) = route.get_visit(v) {
+                    let parent_text = parent.map_or("-", |p| &graph.vert(p).alias);
                     let text = format!("{} ({parent_text})", distance.ceil());
                     d.draw_text_ex(&font, &text, pos + rvec2(text_size.x*0.5 + 3.0, 3), font.baseSize as f32, 0.0, Color::GRAY);
                 }

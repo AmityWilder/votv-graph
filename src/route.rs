@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, time::Instant};
+use std::{collections::VecDeque, time::{Duration, Instant}};
 use crate::{console::{console_debug, Console}, console_write, graph::{Adjacent, VertexID, WeightedGraph}};
 
 pub enum Phase {
@@ -26,14 +26,23 @@ pub struct Visit {
 }
 
 pub struct RouteGenerator {
-    pub targets: Vec<VertexID>,
-    pub result: Vec<VertexID>,
-    pub root: VertexID,
-    pub visited: Box<[Option<Visit>]>,
-    pub queue: VecDeque<VertexID>,
-    pub phase: Phase,
-    pub is_finished: bool,
-    pub last_step: Instant,
+    targets: Vec<VertexID>,
+    result: Vec<VertexID>,
+    root: VertexID,
+    visited: Box<[Option<Visit>]>,
+    queue: VecDeque<VertexID>,
+    phase: Phase,
+    is_finished: bool,
+    last_step: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexClass {
+    Current,
+    Adjacent,
+    Root,
+    Result,
+    Target,
 }
 
 impl RouteGenerator {
@@ -48,6 +57,42 @@ impl RouteGenerator {
             is_finished: false,
             last_step: Instant::now(),
         }
+    }
+
+    pub const fn is_finished(&self) -> bool {
+        self.is_finished
+    }
+
+    pub fn last_step_elapsed(&self) -> Duration {
+        self.last_step.elapsed()
+    }
+
+    pub fn classify(&self, graph: &WeightedGraph, v: VertexID) -> Option<VertexClass> {
+        if let Phase::Edge { current, i } = &self.phase {
+            if &v == current {
+                return Some(VertexClass::Current);
+            } else if graph.adjacent(*current).get(*i).is_some_and(|x| &v == &x.vertex) {
+                return Some(VertexClass::Adjacent);
+            }
+        }
+
+        if !self.is_finished() && v == self.root {
+            Some(VertexClass::Root)
+        } else if self.result.contains(&v) {
+            Some(VertexClass::Result)
+        } else if self.targets.contains(&v) {
+            Some(VertexClass::Target)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_visit(&self, id: VertexID) -> Option<Visit> {
+        self.visited[id as usize]
+    }
+
+    pub fn result(&self) -> &[VertexID] {
+        &self.result
     }
 
     fn begin_phase_edge(&mut self, console: &mut Console) {
@@ -96,12 +141,12 @@ impl RouteGenerator {
             }
 
             Phase::Edge { current, i } => {
-                if let Some(&Adjacent { vertex, weight }) = graph.adjacent[*current as usize].get(*i) {
-                    console_debug!(console, Info, 2, "looking at vertex {current} ({i}/{})", graph.adjacent[*current as usize].len());
+                if let Some(&Adjacent { vertex, weight }) = graph.adjacent(*current).get(*i) {
+                    console_debug!(console, Info, 2, "looking at vertex {current} ({i}/{})", graph.adjacent(*current).len());
                     if self.visited[vertex as usize].is_none() {
                         self.queue.push_back(vertex);
                         console_debug!(console, Info, 3, "pushed vertex {vertex} to queue");
-                        for &Adjacent { vertex, .. } in &graph.adjacent[vertex as usize] {
+                        for &Adjacent { vertex, .. } in graph.adjacent(vertex) {
                             if !self.queue.contains(&vertex) {
                                 self.queue.push_back(vertex);
                                 console_debug!(console, Info, 3, "pushed vertex {vertex} to queue");
@@ -156,7 +201,7 @@ impl RouteGenerator {
                     console_debug!(console, Info, 2, "adding vertex {} to results", self.root);
                     if self.targets.is_empty() {
                         let final_route = self.result.iter()
-                            .map(|&v| graph.verts[v as usize].id.as_str())
+                            .map(|&v| graph.vert(v).id.as_str())
                             .collect::<Vec<&str>>()
                             .join(" - ");
                         console.reply.clear();
@@ -168,7 +213,7 @@ impl RouteGenerator {
                         if *i + 1 < self.result.len() {
                             let a = &self.result[*i];
                             let b = &self.result[*i + 1];
-                            distance += graph.adjacent[*a as usize].iter()
+                            distance += graph.adjacent(*a).iter()
                                 .find_map(|e| (&e.vertex == b).then_some(e.weight))
                                 .expect("results should be adjacent");
                             self.visited[*b as usize] = Some(Visit { distance, parent: Some(*a) });

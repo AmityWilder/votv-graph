@@ -349,7 +349,7 @@ impl Cmd {
                 camera.target = Vector3::zero();
                 Ok(())
             } else {
-                let vert = graph.verts.iter()
+                let vert = graph.verts().iter()
                     .find(|vert| (vert.id.eq_ignore_ascii_case(target) || vert.alias.eq_ignore_ascii_case(target)));
 
                 if let Some(vert) = vert {
@@ -361,7 +361,7 @@ impl Cmd {
                 }
             }
         } else {
-            let vert = graph.verts.iter()
+            let vert = graph.verts().iter()
                 .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, camera.target, 1.0));
 
             if let Some(target) = vert {
@@ -430,7 +430,7 @@ impl Cmd {
         if target_iter.peek().is_none() {
             return Err(CmdError::MissingArgs("targets"));
         }
-        *route = Some(RouteGenerator::new(graph.verts.len(), start, target_iter));
+        *route = Some(RouteGenerator::new(graph.verts().len(), start, target_iter));
         console_write!(console, Info, "generating route");
         Ok(true)
     }
@@ -498,7 +498,7 @@ impl Cmd {
         let b = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
         let a = graph.find_vert(a).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
         let b = graph.find_vert(b).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
-        if graph.adjacent[a as usize].iter().any(|Adjacent { vertex, .. }| vertex == &b) {
+        if graph.adjacent(a).iter().any(|Adjacent { vertex, .. }| vertex == &b) {
             console_write!(console, Warning, "vertices {a} and {b} are already connected");
         } else {
             graph.add_edge(a, b);

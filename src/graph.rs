@@ -34,9 +34,9 @@ pub struct Adjacent {
 
 #[derive(Debug, Clone)]
 pub struct WeightedGraph {
-    pub verts: Vec<Vertex>,
-    pub edges: Vec<Edge>,
-    pub adjacent: Vec<Vec<Adjacent>>,
+    verts: Vec<Vertex>,
+    edges: Vec<Edge>,
+    adjacent: Vec<Vec<Adjacent>>,
 }
 impl WeightedGraph {
     pub fn new(verts: Vec<Vertex>, edges: Vec<Edge>) -> Self {
@@ -54,6 +54,26 @@ impl WeightedGraph {
             verts,
             edges,
         }
+    }
+
+    pub fn vert(&self, id: VertexID) -> &Vertex {
+        &self.verts[id as usize]
+    }
+
+    pub fn vert_mut(&mut self, id: VertexID) -> &mut Vertex {
+        &mut self.verts[id as usize]
+    }
+
+    pub fn verts(&self) -> &[Vertex] {
+        &self.verts
+    }
+
+    pub fn edges(&self) -> &[Edge] {
+        &self.edges
+    }
+
+    pub fn adjacent(&self, vertex: VertexID) -> &[Adjacent] {
+        &self.adjacent[vertex as usize]
     }
 
     pub fn verts_iter(&self) -> impl ExactSizeIterator<Item = (VertexID, &Vertex)> + DoubleEndedIterator {
