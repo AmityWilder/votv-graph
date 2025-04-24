@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
 use console::{console_write, pop_word, Cmd, Console, ConsoleLineCategory, ConsoleLineRef, EnrichEx, Tempo};
-use graph::{define_edges, define_verts, WeightedGraph};
+use graph::WeightedGraph;
 use raylib::prelude::*;
 use route::{VertexClass, Visit};
 

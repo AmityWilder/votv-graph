@@ -105,37 +105,3 @@ impl WeightedGraph {
         self.adjacent.push(Vec::new());
     }
 }
-
-macro_rules! define_verts {
-    ($name:ident: $($v_id:ident ($v_alias:ident) = ($x:expr, $y:expr, $z:expr);)*) => {
-        #[allow(nonstandard_style, unused)]
-        #[derive(Clone, Copy)]
-        pub enum VertexNames { $($v_id),* }
-        impl VertexNames {
-            pub const POSITIONS: [Vector3; [$($x),*].len()] = [$(Vector3::new($x as f32, $y as f32, $z as f32)),*];
-            pub fn distance_to(self, other: VertexNames) -> f32 {
-                Self::POSITIONS[self as usize].distance_to(Self::POSITIONS[other as usize])
-            }
-            pub const fn id(self) -> $crate::graph::VertexID {
-                self as $crate::graph::VertexID
-            }
-        }
-        #[allow(unused)]
-        use VertexNames::{$($v_id as $v_alias),*};
-        let $name = vec![$($crate::graph::Vertex::new(stringify!($v_id), stringify!($v_alias), $x, $y, $z)),*];
-    };
-}
-
-macro_rules! define_edges {
-    ($name:ident: $($a:ident--$b:ident),* $(,)?) => {
-        let $name = vec![$(
-            $crate::graph::Edge {
-                id: None,
-                adj: [$a.id(), $b.id()],
-                weight: $a.distance_to($b),
-            },
-        )*];
-    };
-}
-
-pub(crate) use {define_verts, define_edges};
