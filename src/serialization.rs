@@ -2,29 +2,25 @@ use std::str::FromStr;
 use crate::graph::{Edge, Vertex, VertexID, WeightedGraph};
 use raylib::prelude::*;
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Version(u32);
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Version {
+    major: u8,
+    minor: u8,
+    patch: u16,
+}
 impl Version {
     pub const fn new(major: u8, minor: u8, patch: u16) -> Self {
-        Self(((major as u32) << 0o30) | ((minor as u32) << 0o20) | (patch as u32))
-    }
-    pub const fn major(&self) -> u8 {
-        (self.0 >> 0o30) as u8
-    }
-    pub const fn minor(&self) -> u8 {
-        (self.0 >> 0o20) as u8
-    }
-    pub const fn patch(&self) -> u16 {
-        self.0 as u16
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 }
-impl std::fmt::Debug for Version {
+impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Version")
-            .field("major", &self.major())
-            .field("minor", &self.minor())
-            .field("patch", &self.patch())
-            .finish()
+        let Self { major, minor, patch } = self;
+        write!(f, "{major}.{minor}.{patch}")
     }
 }
 impl FromStr for Version {
@@ -49,7 +45,6 @@ pub enum LoadGraphErrorKind {
     UnexpectedEOF,
     MissingVersion,
     UnknownVersion(Version),
-    DuplicateSection(&'static str, [usize; 2]),
     UnknownVertex(String),
     IncompletePosition,
     Unexpected,
@@ -87,7 +82,6 @@ impl std::fmt::Display for LoadGraphError {
             UnexpectedEOF => f.write_str("unexpected end of file"),
             MissingVersion => f.write_str("missing version number"),
             UnknownVersion(v) => write!(f, "unknown version number: {v:?} (current: {CURRENT_VERSION:?})"),
-            DuplicateSection(name, [first, second]) => write!(f, "multiple {name} sections encountered: first at line {first}, then another at line {second}"),
             UnknownVertex(id) => write!(f, "edge references an unknown vertex: id `{id}`"),
             IncompletePosition => f.write_str("position is missing one or more coordinates"),
             Unexpected => f.write_str("unexpected text"),
@@ -217,7 +211,17 @@ impl WeightedGraph {
         Ok(Self::new(verts, edges))
     }
 
-    pub fn save_to_memory(&self) -> std::io::Result<String> {
-        todo!()
+    pub fn save_to_memory(&self) -> String {
+        std::iter::once(format!("v{CURRENT_VERSION}"))
+            .chain(self.verts().into_iter().map(|v| format!("{}:{}={},{},{}", &v.id, &v.alias, v.pos.x, v.pos.y, v.pos.z)))
+            .chain(self.edges().into_iter().map(|e| {
+                fn shorter<'a>(str1: &'a str, str2: &'a str) -> &'a str {
+                    if str1.len() < str2.len() { str1 } else { str2 }
+                }
+                let [a, b] = e.adj.map(|v| self.vert(v));
+                format!("{}--{}:{}", shorter(&a.id, &a.alias), shorter(&b.id, &b.alias), e.weight)
+            }))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }

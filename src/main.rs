@@ -6,10 +6,10 @@ use graph::WeightedGraph;
 use raylib::prelude::*;
 use route::{VertexClass, Visit};
 
-pub mod serialization;
-pub mod console;
-pub mod graph;
-pub mod route;
+mod serialization;
+mod console;
+mod graph;
+mod route;
 
 pub trait MeasureTextEx {
     #[inline]
@@ -146,6 +146,7 @@ fn main() {
                                     Cmd::SvNew => Cmd::run_sv_new(&mut graph, &mut route, camera, &mut console, args),
                                     Cmd::SvEdge => Cmd::run_sv_edge(&mut graph, &mut route, &mut console, args),
                                     Cmd::SvLoad => Cmd::run_sv_load(&mut graph, &mut route, &mut console, args),
+                                    Cmd::SvSave => Cmd::run_sv_save(&mut graph, &mut console, args),
                                     Cmd::Tempo => Cmd::run_tempo(&mut console, args, &mut tempo),
                                     Cmd::Dbg => {
                                         is_debugging = !is_debugging;

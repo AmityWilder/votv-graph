@@ -247,10 +247,6 @@ define_commands!{
         )]
         Focus,
 
-        #[input("sv.load")]
-        #[usage(case(args("<PATH>"), desc = "Load another map from a graph file"))]
-        SvLoad,
-
         #[input("sv.route")]
         #[usage(
             case(args("<START>", "<ID|ALIAS>..."), desc = "Generate the shortest route visiting each target (separated by spaces)"),
@@ -282,6 +278,14 @@ define_commands!{
             case(args("<ID|ALIAS>"),               desc = "Print a list of all vertices adjacent to the target"),
         )]
         SvEdge,
+
+        #[input("sv.load")]
+        #[usage(case(args("<PATH>"), desc = "Load another map from a graph file"))]
+        SvLoad,
+
+        #[input("sv.save")]
+        #[usage(case(args("<PATH>"), desc = "Save the current map to a graph file"))]
+        SvSave,
 
         #[input("tempo")]
         #[usage(
@@ -568,6 +572,22 @@ impl Cmd {
             *graph = WeightedGraph::load_from_memory(mem).map_err(|e| CmdError::LoadGraphFailed(e))?;
             *route = None;
             console_write!(console, Info, "graph loaded from \"{path_str}\"");
+            Ok(())
+        } else {
+            Err(CmdError::CheckUsage(Cmd::SvLoad))
+        }
+    }
+
+    pub fn run_sv_save(
+        graph: &mut WeightedGraph,
+        console: &mut Console,
+        mut args: std::str::Split<'_, char>,
+    ) -> CmdResult<()> {
+        if let Some(path_str) = args.next() {
+            let path = Path::new(path_str);
+            let mem = WeightedGraph::save_to_memory(&graph);
+            std::fs::write(path, mem)?;
+            console_write!(console, Info, "graph saved to \"{path_str}\"");
             Ok(())
         } else {
             Err(CmdError::CheckUsage(Cmd::SvLoad))
