@@ -127,10 +127,10 @@ impl std::fmt::Display for LoadGraphError {
             ParseFloat(_) => "expected a float",
             UsizeToVertexID(_) => unimplemented!(),
         };
-        let mut snippet = format!("{:>4} |    {}\n     |    {:<space$}{:^<squig$} {line_msg}", self.src.line + 1, self.src.code, "", "", space=self.src.range.start, squig=self.src.range.len().max(1));
+        let mut snippet = format!("<color=rgb(40,140,250)>{:>4} |</color>    <color=rgb(200,200,200)>{}</color>\n     <color=rgb(40,140,250)>|</color>    {:<space$}{:^<squig$} {line_msg}", self.src.line + 1, self.src.code, "", "", space=self.src.range.start, squig=self.src.range.len().max(1));
         if let DuplicateName(prev) = &self.kind {
             let line_msg = "first ocurrance here";
-            snippet = format!("{:>4} |    {}\n     |    {:<space$}{:-<squig$} {line_msg}\n    ...\n{snippet}", prev.line + 1, prev.code, "", "", space=prev.range.start, squig=prev.range.len().max(1))
+            snippet = format!("<color=rgb(40,140,250)>{:>4} |</color>    <color=rgb(200,200,200)>{}</color>\n     <color=rgb(40,140,250)>|</color>    {:<space$}<color=rgb(40,140,250)>{:-<squig$} {line_msg}</color>\n    <color=rgb(40,140,250)>...</color>\n{snippet}", prev.line + 1, prev.code, "", "", space=prev.range.start, squig=prev.range.len().max(1))
         }
         write!(f, "\ncode:\n{snippet}")?;
         Ok(())
