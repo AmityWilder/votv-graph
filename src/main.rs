@@ -25,126 +25,17 @@ const VERTEX_RADIUS: f32 = 8.0;
 const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
 
 fn main() {
-    define_verts!{
-        verts:
-        // Satellites
-        Alpha    (A) = (     0.0, 0.0,      0.0);
-        Bravo    (B) = (-  100.0, 0.0, -  200.0);
-        Charlie  (C) = (     0.0, 0.0, -  200.0);
-        Delta    (D) = (   100.0, 0.0, -  200.0);
-        Echo     (E) = (   200.0, 0.0, -  100.0);
-        Foxtrot  (F) = (   200.0, 0.0,      0.0);
-        Golf     (G) = (   200.0, 0.0,    100.0);
-        Hotel    (H) = (   100.0, 0.0,    200.0);
-        India    (I) = (     0.0, 0.0,    200.0);
-        Juliett  (J) = (-  100.0, 0.0,    200.0);
-        Kilo     (K) = (-  200.0, 0.0,    100.0);
-        Lima     (L) = (-  200.0, 0.0,      0.0);
-        Mike     (M) = (-  200.0, 0.0, -  100.0);
-        November (N) = (-  300.0, 0.0, -  300.0);
-        Oscar    (O) = (   300.0, 0.0, -  300.0);
-        Papa     (P) = (   300.0, 0.0,    300.0);
-        Quebec   (Q) = (-  300.0, 0.0,    300.0);
-        Romeo    (R) = (-  500.0, 0.0, -  500.0);
-        Sierra   (S) = (     0.0, 0.0, -  500.0);
-        Tango    (T) = (   500.0, 0.0, -  500.0);
-        Uniform  (U) = (   500.0, 0.0,      0.0);
-        Victor   (V) = (   500.0, 0.0,    500.0);
-        Whiskey  (W) = (     0.0, 0.0,    500.0);
-        Xray     (X) = (-  500.0, 0.0,    500.0);
-        Yankee   (Y) = (-  500.0, 0.0,      0.0);
-        Zulu     (Z) = ( 10000.0, 0.0,  10000.0);
+    let mut is_giving_command = true;
+    let mut command_history = VecDeque::new();
+    let mut command_history_offset = 0;
+    let mut console: Console = Console::new();
+    let mut is_debugging = false;
 
-        // Transformers
-        TR_1 (TR1) = ( 400.0, 0.0,  200.0); // Transformer 1
-        TR_2 (TR2) = (-540.0, 0.0,  232.0); // Transformer 2
-        TR_3 (TR3) = (-400.0, 0.0, -475.0); // Transformer 3
-
-        // Bridges
-        Bridge_Alpha_East  (brAe) = ( -76.9, 0.0,   11.7); // Bridge Alpha East
-        Bridge_Alpha_West  (brAw) = ( -51.0, 0.0,   11.8); // Bridge Alpha West
-        Bridge_Quebec_East (brQe) = (-223.2, 0.0,  285.1); // Bridge Quebec East
-        Bridge_Quebec_West (brQw) = (-197.3, 0.0,  282.8); // Bridge Quebec West
-        Bridge_Xray_East   (brXe) = (-400.2, 0.0,  497.7); // Bridge Xray East
-        Bridge_Xray_West   (brXw) = (-376.6, 0.0,  508.7); // Bridge Xray West
-        Bridge_Echo_East   (brEe) = ( 116.2, 0.0, -121.9); // Bridge Echo East
-        Bridge_Echo_West   (brEw) = ( 120.7, 0.0,  -96.3); // Bridge Echo West
-        Bridge_Oscar_East  (brOe) = ( 274.2, 0.0, -360.0); // Bridge Oscar East
-        Bridge_Oscar_West  (brOw) = ( 295.5, 0.0, -345.0); // Bridge Oscar West
-    }
-
-    define_edges!{
-        edges:
-        A -- E,   A -- F,   A -- G,   A -- H,   A -- I,   A -- J,   A -- P,
-        E -- F,   E -- H,   E -- I,   E -- J,   E -- O,   E -- P,   E -- T,   E -- U,   E -- V,   E -- TR1,
-        F -- G,   F -- H,   F -- I,   F -- J,   F -- O,   F -- P,   F -- W,   F -- T,   F -- U,   F -- V,   F -- TR1,
-        G -- H,   G -- I,   G -- J,   G -- O,   G -- P,   G -- W,   G -- T,   G -- U,   G -- V,   G -- TR1,
-        H -- I,   H -- O,   H -- P,   H -- W,   H -- T,   H -- U,   H -- V,   H -- TR1,
-        I -- J,   I -- O,   I -- P,   I -- W,   I -- T,   I -- U,   I -- V,
-        J -- O,   J -- P,   J -- W,   J -- T,   J -- V,
-        O -- P,   O -- W,   O -- T,   O -- U,   O -- V,   O -- TR1,
-        P -- W,   P -- T,   P -- U,   P -- V,   P -- TR1,
-        W -- U,   W -- V,   W -- TR1,
-        T -- U,   T -- TR1,
-        U -- V,   U -- TR1,
-        V -- TR1,
-        B -- C,   B -- K,   B -- L,   B -- M,   B -- N,   B -- Q,   B -- R,   B -- S,   B -- X,   B -- Y,   B -- TR2, B -- TR3,
-        C -- D,   C -- K,   C -- L,   C -- M,   C -- N,   C -- Q,   C -- R,   C -- S,   C -- X,   C -- Y,   C -- TR2, C -- TR3,
-        D -- K,   D -- L,   D -- M,   D -- N,   D -- R,   D -- S,   D -- X,   D -- TR2, D -- TR3,
-        K -- L,   K -- N,   K -- Q,   K -- R,   K -- X,   K -- Y,   K -- TR2, K -- TR3,
-        L -- M,   L -- N,   L -- Q,   L -- R,   L -- S,   L -- X,   L -- Y,   L -- TR2, L -- TR3,
-        M -- N,   M -- Q,   M -- R,   M -- S,   M -- X,   M -- Y,   M -- TR2, M -- TR3,
-        N -- Q,   N -- R,   N -- S,   N -- X,   N -- Y,   N -- TR2, N -- TR3,
-        Q -- R,   Q -- X,   Q -- Y,   Q -- TR2, Q -- TR3,
-        R -- S,   R -- Y,   R -- TR2, R -- TR3,
-        S -- Y,   S -- TR2, S -- TR3,
-        X -- Y,   X -- TR2, X -- TR3,
-        Y -- TR2, Y -- TR3,
-        TR2 -- TR3,
-        brXe -- brQe,
-        brQe -- brAe,
-        brAe -- brEe,
-        brEe -- brOe,
-        brXw -- brQw,
-        brQw -- brAw,
-        brAw -- brEw,
-        brEw -- brOw,
-        A -- brAw, A -- brEw, A -- brQw,
-        E -- brAw, E -- brEw, E -- brOw, E -- brQw, E -- brXw,
-        F -- brAw, F -- brEw, F -- brOw, F -- brQw, F -- brXw,
-        G -- brAw, G -- brEw, G -- brOw, G -- brQw, G -- brXw,
-        H -- brAw, H -- brEw, H -- brOw, H -- brQw, H -- brXw,
-        I -- brAw, I -- brEw, I -- brOw, I -- brQw, I -- brXw,
-        J -- brAw, J -- brEw, J -- brQw, J -- brXw,
-        O -- brEw, O -- brOw, O -- brQw, O -- brXw,
-        P -- brAw, P -- brEw, P -- brOw, P -- brQw, P -- brXw,
-        W -- brAw, W -- brEw, W -- brOw, W -- brQw, W -- brXw,
-        T -- brEw, T -- brOw, T -- brQw, T -- brXw,
-        U -- brAw, U -- brEw, U -- brOw, U -- brQw, U -- brXw,
-        V -- brAw, V -- brEw, V -- brOw, V -- brQw, V -- brXw,
-        TR1 -- brAw, TR1 -- brEw, TR1 -- brOw, TR1 -- brQw, TR1 -- brXw,
-        B -- brAe, B -- brEe, B -- brOe, B -- brQe, B -- brXe,
-        C -- brAe, C -- brEe, C -- brOe, C -- brXe,
-        D -- brAe, D -- brEe, D -- brOe,
-        K -- brAe, K -- brOe, K -- brQe,
-        L -- brAe, L -- brEe, L -- brOe, L -- brQe, L -- brXe,
-        M -- brAe, M -- brEe, M -- brOe, M -- brQe, M -- brXe,
-        N -- brAe, N -- brEe, N -- brOe, N -- brQe, N -- brXe,
-        Q -- brAe, Q -- brQe, Q -- brXe,
-        R -- brAe, R -- brEe, R -- brOe, R -- brQe, R -- brXe,
-        S -- brAe, S -- brEe, S -- brOe, S -- brQe,
-        X -- brAe, X -- brQe, X -- brXe,
-        Y -- brAe, Y -- brEe, Y -- brOe, Y -- brQe, Y -- brXe,
-        TR2 -- brAe, TR2 -- brEe, TR2 -- brOe, TR2 -- brQe, TR2 -- brXe,
-        TR3 -- brAe, TR3 -- brEe, TR3 -- brOe, TR3 -- brQe, TR3 -- brXe,
-        brXe -- brXw,
-        brQe -- brQw,
-        brAe -- brAw,
-        brEe -- brEw,
-        brOe -- brOw,
-    }
-
-    let mut graph = WeightedGraph::new(verts, edges);
+    let mut graph = WeightedGraph::load_from_memory(include_str!("resources/votv.graph"))
+        .unwrap_or_else(|e| {
+            console_write!(console, Error, "error loading hard-coded map: {e}");
+            WeightedGraph::new(Vec::new(), Vec::new())
+        });
 
     let mut route = None;
 
@@ -154,12 +45,6 @@ fn main() {
         Vector3::new(0.0, 0.0, -1.0),
         45.0,
     );
-
-    let mut is_giving_command = true;
-    let mut command_history = VecDeque::new();
-    let mut command_history_offset = 0;
-    let mut console: Console = Console::new();
-    let mut is_debugging = false;
 
     let mut tempo = Tempo::new();
 
