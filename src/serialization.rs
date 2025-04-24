@@ -46,6 +46,7 @@ pub enum LoadGraphErrorKind {
     MissingVersion,
     UnknownVersion(Version),
     UnknownVertex(String),
+    DuplicateName(usize, String),
     IncompletePosition,
     Unexpected,
     ParseInt(std::num::ParseIntError),
@@ -67,7 +68,7 @@ impl LoadGraphError {
             kind,
         }
     }
-    pub fn new_with_code(line: usize, code: impl ToString, kind: LoadGraphErrorKind) -> Self {
+    pub fn with_code(line: usize, code: impl ToString, kind: LoadGraphErrorKind) -> Self {
         Self {
             line,
             code: Some(code.to_string()),
@@ -83,6 +84,7 @@ impl std::fmt::Display for LoadGraphError {
             MissingVersion => f.write_str("missing version number"),
             UnknownVersion(v) => write!(f, "unknown version number: {v:?} (current: {CURRENT_VERSION:?})"),
             UnknownVertex(id) => write!(f, "edge references an unknown vertex: id `{id}`"),
+            DuplicateName(prev, name) => write!(f, "the name (alias or ID) `{name}` appears on multiple vertices (first appearance on line {})", prev + 1),
             IncompletePosition => f.write_str("position is missing one or more coordinates"),
             Unexpected => f.write_str("unexpected text"),
             ParseInt(_) => f.write_str("error while trying to parse an integer"),
@@ -90,7 +92,7 @@ impl std::fmt::Display for LoadGraphError {
             TryFromInt(_) => f.write_str("failed to convert integer"),
         }?;
         if let Some(code) = &self.code {
-            write!(f, "\ncode: \"{code}\"")?;
+            write!(f, "\ncode:```\n{code}\n```")?;
         }
         Ok(())
     }
@@ -104,7 +106,8 @@ impl From<LoadGraphError> for std::io::Error {
 
 impl WeightedGraph {
     pub fn load_from_memory<C: AsRef<str>>(bytes: C) -> Result<Self, LoadGraphError> {
-        let mut line_iter = bytes.as_ref().lines().enumerate();
+        let bytes = bytes.as_ref();
+        let mut line_iter = bytes.lines().enumerate();
 
         // Check version
         {
@@ -112,21 +115,33 @@ impl WeightedGraph {
                 .ok_or(LoadGraphError::new(0, UnexpectedEOF))?;
 
             if !version_code.starts_with('v') {
-                return Err(LoadGraphError::new_with_code(version_line, version_code, MissingVersion));
+                return Err(LoadGraphError::with_code(version_line, version_code, MissingVersion));
             }
 
             version_code = &version_code[1..];
 
             let version = version_code.parse::<Version>()
-                .map_err(|e| LoadGraphError::new_with_code(version_line, version_code, ParseInt(e)))?;
+                .map_err(|e| LoadGraphError::with_code(version_line, version_code, ParseInt(e)))?;
 
             if version > CURRENT_VERSION {
-                return Err(LoadGraphError::new_with_code(version_line, version_code, UnknownVersion(version)));
+                return Err(LoadGraphError::with_code(version_line, version_code, UnknownVersion(version)));
             }
         }
 
-        let mut verts: Vec<Vertex> = Vec::new();
-        let mut edges: Vec<Edge> = Vec::new();
+        let (vert_count_est, edge_count_est) = bytes
+            .lines()
+            .fold((0, 0), |(v, e), mut line| {
+                if let Some(comment_pos) = line.find("//") {
+                    line = &line[..comment_pos];
+                }
+                if line.contains('=') { (v + 1, e) }
+                else if line.contains("--") { (v, e + 1) }
+                else { (v, e) }
+            });
+
+        let mut vert_creation: Vec<usize> = Vec::with_capacity(vert_count_est);
+        let mut verts: Vec<Vertex> = Vec::with_capacity(vert_count_est);
+        let mut edges: Vec<Edge> = Vec::with_capacity(edge_count_est);
         for (line, mut code) in line_iter {
             if let Some(comment_start) = code.find("//") {
                 code = &code[..comment_start];
@@ -142,9 +157,9 @@ impl WeightedGraph {
                 let find_vert = |s: &str| -> Result<VertexID, LoadGraphError> {
                     verts.iter()
                         .position(|v| v.alias.as_str() == s || v.id.as_str() == s)
-                            .ok_or_else(|| LoadGraphError::new_with_code(line, code, UnknownVertex(s.to_string())))?
+                            .ok_or_else(|| LoadGraphError::with_code(line, code, UnknownVertex(s.to_string())))?
                         .try_into()
-                            .map_err(|e| LoadGraphError::new_with_code(line, code, TryFromInt(e)))
+                            .map_err(|e| LoadGraphError::with_code(line, code, TryFromInt(e)))
                 };
 
                 let adj = [find_vert(a.trim())?, find_vert(b.trim())?];
@@ -158,7 +173,7 @@ impl WeightedGraph {
                             let weight_aug = weight_str[1..]
                                 .trim_start()
                                 .parse::<f32>()
-                                    .map_err(|e| LoadGraphError::new_with_code(line, code, ParseFloat(e)))?;
+                                    .map_err(|e| LoadGraphError::with_code(line, code, ParseFloat(e)))?;
                             match ch {
                                 '*' => distance*weight_aug,
                                 '+' => distance + weight_aug,
@@ -169,7 +184,7 @@ impl WeightedGraph {
                         }
                     } else {
                         weight_str.parse()
-                            .map_err(|e| LoadGraphError::new_with_code(line, code, ParseFloat(e)))?
+                            .map_err(|e| LoadGraphError::with_code(line, code, ParseFloat(e)))?
                     };
 
                 edges.push(Edge { id: None, adj, weight });
@@ -185,12 +200,49 @@ impl WeightedGraph {
 
                 let (id, alias) = (id.to_string(), alias.to_string());
 
+                // check for duplicates
+                {
+                    let dupe = [id.as_str(), alias.as_str()].into_iter()
+                        .find_map(|name|
+                            verts.iter()
+                                .position(|vert|
+                                    [vert.alias.as_str(), vert.id.as_str()].into_iter()
+                                        .any(|other| name.eq_ignore_ascii_case(other))
+                                )
+                                .map(|n| (vert_creation[n], name))
+                        );
+
+                    if let Some((prev, name)) = dupe {
+                        debug_assert_ne!(prev, line, "alias == id should not be considered a duplicate");
+
+                        let prev_code = bytes
+                            .lines()
+                            .nth(prev)
+                            .expect("line should exist if it was written to vert_creation");
+
+                        let skipped_lines = (line - prev > 1)
+                            .then(|| format!("({} lines skipped)\n", line - prev));
+
+                        return Err(LoadGraphError::with_code(
+                            line,
+                            format!("(at line {}): {prev_code}\n{}(at line {}): {code}",
+                                prev + 1,
+                                skipped_lines.as_ref()
+                                    .map(String::as_str)
+                                    .unwrap_or_default(),
+                                line + 1,
+                            ),
+                            DuplicateName(prev, name.to_string()),
+                        ))
+                    }
+                }
+
                 let pos_comp = |iter: &mut std::str::Split<'_, char>| -> Result<f32, LoadGraphError> {
                     iter.next()
-                            .ok_or_else(|| LoadGraphError::new_with_code(line, code, IncompletePosition))?
+                            .ok_or_else(|| LoadGraphError::with_code(line, code, IncompletePosition))?
                         .trim()
                         .parse()
-                            .map_err(|e| LoadGraphError::new_with_code(line, code, ParseFloat(e)))
+                            .map_err(|e| LoadGraphError::with_code(line, code, ParseFloat(e)))
                 };
 
                 let mut pos_iter = pos_str.split(',');
@@ -199,13 +251,14 @@ impl WeightedGraph {
                 let z = pos_comp(&mut pos_iter)?;
 
                 if let Some(code) = pos_iter.next() {
-                    return Err(LoadGraphError::new_with_code(line, code, Unexpected));
+                    return Err(LoadGraphError::with_code(line, code, Unexpected));
                 }
                 let pos = Vector3::new(x, y, z);
 
+                vert_creation.push(line);
                 verts.push(Vertex { id, alias, pos });
             } else {
-                return Err(LoadGraphError::new_with_code(line, code, Unexpected));
+                return Err(LoadGraphError::with_code(line, code, Unexpected));
             }
         }
         Ok(Self::new(verts, edges))
