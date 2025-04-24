@@ -1,3 +1,5 @@
+#![feature(substr_range, str_split_remainder)]
+
 use std::collections::VecDeque;
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
