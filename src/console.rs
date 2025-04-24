@@ -1,6 +1,6 @@
-use std::{borrow::Cow, num::NonZeroU32};
+use std::{borrow::Cow, num::NonZeroU32, path::Path};
 use raylib::prelude::*;
-use crate::{graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
+use crate::{graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
 
 pub enum Tempo {
     Sync,
@@ -247,6 +247,10 @@ define_commands!{
         )]
         Focus,
 
+        #[input("sv.load")]
+        #[usage(case(args("<PATH>"), desc = "Load another map from a graph file"))]
+        SvLoad,
+
         #[input("sv.route")]
         #[usage(
             case(args("<START>", "<ID|ALIAS>..."), desc = "Generate the shortest route visiting each target (separated by spaces)"),
@@ -300,6 +304,8 @@ pub enum CmdError {
     ParseCoordsFailed(ParseCoordsError),
     ParseTempoTicksFailed(std::num::ParseIntError),
     ParseTempoMillisecondsFailed(std::num::ParseIntError),
+    LoadGraphFailed(LoadGraphError),
+    IOError(std::io::Error),
 }
 impl std::fmt::Display for CmdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -315,6 +321,8 @@ impl std::fmt::Display for CmdError {
             Self::ParseCoordsFailed(_) => f.write_str("could not parse coordinates"),
             Self::ParseTempoTicksFailed(_) => f.write_str("could not parse ticks"),
             Self::ParseTempoMillisecondsFailed(_) => f.write_str("could not parse milliseconds"),
+            Self::LoadGraphFailed(_) => f.write_str("could not load graph"),
+            Self::IOError(_) => f.write_str("filesystem IO error"),
         }
     }
 }
@@ -328,13 +336,23 @@ impl std::error::Error for CmdError {
                 => None,
 
             Self::ParseCoordsFailed(e) => Some(e),
+            Self::LoadGraphFailed(e) => Some(e),
 
             | Self::ParseTempoTicksFailed(e)
             | Self::ParseTempoMillisecondsFailed(e)
                 => Some(e),
+
+            Self::IOError(e) => Some(e),
         }
     }
 }
+impl From<std::io::Error> for CmdError {
+    fn from(value: std::io::Error) -> Self {
+        CmdError::IOError(value)
+    }
+}
+
+pub type CmdResult<T> = Result<T, CmdError>;
 
 impl Cmd {
     pub fn run_focus(
@@ -342,7 +360,7 @@ impl Cmd {
         camera: &mut Camera3D,
         console: &mut Console,
         mut args: std::str::Split<'_, char>,
-    ) -> Result<(), CmdError> {
+    ) -> CmdResult<()> {
         if let Some(target) = args.next() {
             if target == "reset" {
                 camera.position = CAMERA_POSITION_DEFAULT;
@@ -407,7 +425,7 @@ impl Cmd {
         interactive_targets: Vec<VertexID>,
         console: &mut Console,
         args: std::str::Split<'_, char>,
-    ) -> Result<bool, CmdError> {
+    ) -> CmdResult<bool> {
         let mut args = args.peekable();
         let targets = match args.peek() {
             Some(&("-i" | "interactive")) => {
@@ -441,7 +459,7 @@ impl Cmd {
         interactive_targets: Vec<VertexID>,
         console: &mut Console,
         args: std::str::Split<'_, char>,
-    ) -> Result<bool, CmdError> {
+    ) -> CmdResult<bool> {
         let route = route.as_mut().ok_or(CmdError::NoExistingRoute)?;
         let mut args = args.peekable();
         let targets = match args.peek() {
@@ -473,7 +491,7 @@ impl Cmd {
         camera: Camera3D,
         console: &mut Console,
         mut args: std::str::Split<'_, char>,
-    ) -> Result<(), CmdError> {
+    ) -> CmdResult<()> {
         let id = args.next().ok_or(CmdError::CheckUsage(Cmd::SvNew))?;
         let mut alias = args.next();
         let coords = args.next().or_else(|| alias.take()).ok_or(CmdError::CheckUsage(Cmd::SvNew))?;
@@ -493,7 +511,7 @@ impl Cmd {
         route: &mut Option<RouteGenerator>,
         console: &mut Console,
         mut args: std::str::Split<'_, char>,
-    ) -> Result<(), CmdError> {
+    ) -> CmdResult<()> {
         let a = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
         let b = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
         let a = graph.find_vert(a).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
@@ -512,7 +530,7 @@ impl Cmd {
         console: &mut Console,
         mut args: std::str::Split<'_, char>,
         tempo: &mut Tempo,
-    ) -> Result<(), CmdError> {
+    ) -> CmdResult<()> {
         if let Some(arg) = args.next() {
             if arg == "reset" {
                 *tempo = Tempo::new();
@@ -536,6 +554,24 @@ impl Cmd {
             console_write!(console, Info, "current tempo is {tempo}");
         }
         Ok(())
+    }
+
+    pub fn run_sv_load(
+        graph: &mut WeightedGraph,
+        route: &mut Option<RouteGenerator>,
+        console: &mut Console,
+        mut args: std::str::Split<'_, char>,
+    ) -> CmdResult<()> {
+        if let Some(path_str) = args.next() {
+            let path = Path::new(path_str);
+            let mem = std::fs::read_to_string(path)?;
+            *graph = WeightedGraph::load_from_memory(mem).map_err(|e| CmdError::LoadGraphFailed(e))?;
+            *route = None;
+            console_write!(console, Info, "graph loaded from \"{path_str}\"");
+            Ok(())
+        } else {
+            Err(CmdError::CheckUsage(Cmd::SvLoad))
+        }
     }
 }
 

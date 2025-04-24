@@ -260,6 +260,7 @@ fn main() {
                                     },
                                     Cmd::SvNew => Cmd::run_sv_new(&mut graph, &mut route, camera, &mut console, args),
                                     Cmd::SvEdge => Cmd::run_sv_edge(&mut graph, &mut route, &mut console, args),
+                                    Cmd::SvLoad => Cmd::run_sv_load(&mut graph, &mut route, &mut console, args),
                                     Cmd::Tempo => Cmd::run_tempo(&mut console, args, &mut tempo),
                                     Cmd::Dbg => {
                                         is_debugging = !is_debugging;
@@ -269,7 +270,17 @@ fn main() {
                                     Cmd::Close => break 'window,
                                 };
                                 if let Err(e) = result {
-                                    console_write!(console, Error, "{e}");
+                                    use std::error::Error;
+                                    use std::fmt::Write;
+                                    let mut indent = 0;
+                                    let mut e: &dyn Error = &e;
+                                    let mut msg = e.to_string();
+                                    while let Some(src) = e.source() {
+                                        indent += 1;
+                                        write!(msg, "\n{:1$}{src}", "", 2*indent).unwrap();
+                                        e = src;
+                                    }
+                                    console_write!(console, Error, "{msg}");
                                 }
                             }
 
@@ -314,6 +325,10 @@ fn main() {
             } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
                 command_history_offset = command_history_offset.checked_sub(1).unwrap_or(command_history.len() + 1 - 1);
                 console.command = command_history.get(command_history_offset).cloned().unwrap_or_default();
+            } else if rl.is_key_pressed(KeyboardKey::KEY_V) && (rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)) {
+                if let Ok(clipboard) = rl.get_clipboard_text() {
+                    console.command.push_str(&clipboard);
+                }
             } else {
                 force_blink = false;
             }

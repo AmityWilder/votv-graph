@@ -1,4 +1,4 @@
-use std::{path::Path, str::FromStr};
+use std::str::FromStr;
 use crate::graph::{Edge, Vertex, VertexID, WeightedGraph};
 use raylib::prelude::*;
 
@@ -109,17 +109,8 @@ impl From<LoadGraphError> for std::io::Error {
 }
 
 impl WeightedGraph {
-    pub fn load<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        Self::load_from_memory(std::fs::read_to_string(path)?.as_str())
-            .map_err(std::io::Error::other)
-    }
-
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
-        std::fs::write(path, self.save_to_memory()?)
-    }
-
-    pub fn load_from_memory(bytes: &str) -> Result<Self, LoadGraphError> {
-        let mut line_iter = bytes.lines().enumerate();
+    pub fn load_from_memory<C: AsRef<str>>(bytes: C) -> Result<Self, LoadGraphError> {
+        let mut line_iter = bytes.as_ref().lines().enumerate();
 
         // Check version
         {
@@ -149,22 +140,22 @@ impl WeightedGraph {
 
             if code.trim().is_empty() { continue; }
 
-            if let Some((mut a, mut b)) = code.split_once("--") {
+            if let Some((a, mut b)) = code.split_once("--") {
                 // edge
                 let mut weight_str;
-                (b, weight_str) = b.split_at(b.find(':').unwrap_or_else(|| b.len()));
-                (a, b, weight_str) = (a.trim(), b.trim(), weight_str.trim());
+                (b, weight_str) = b.split_once(':').unwrap_or((b, ""));
 
                 let find_vert = |s: &str| -> Result<VertexID, LoadGraphError> {
                     verts.iter()
-                        .position(|v| v.alias == s || v.id == s)
+                        .position(|v| v.alias.as_str() == s || v.id.as_str() == s)
                             .ok_or_else(|| LoadGraphError::new_with_code(line, code, UnknownVertex(s.to_string())))?
                         .try_into()
                             .map_err(|e| LoadGraphError::new_with_code(line, code, TryFromInt(e)))
                 };
 
-                let adj = [find_vert(a)?, find_vert(b)?];
+                let adj = [find_vert(a.trim())?, find_vert(b.trim())?];
 
+                weight_str = weight_str.trim();
                 let weight_start = weight_str.chars().next();
                 let weight =
                     if weight_start.is_none_or(|ch| matches!(ch, '*'|'+')) {
@@ -190,19 +181,20 @@ impl WeightedGraph {
                 edges.push(Edge { id: None, adj, weight });
             } else if let Some((name, pos_str)) = code.split_once('=') {
                 // vertex
-                let (mut id, mut alias);
-                if let Some(mid) = name.find(':') {
-                    (id, alias) = name.split_at(mid);
-                    (id, alias) = (id.trim(), alias.trim());
-                } else {
-                    id = name.trim();
-                    alias = id;
-                }
+                let (id, alias) =
+                    if let Some((id, alias)) = name.split_once(':') {
+                        (id.trim(), alias.trim())
+                    } else {
+                        let id = name.trim();
+                        (id, id)
+                    };
+
                 let (id, alias) = (id.to_string(), alias.to_string());
 
                 let pos_comp = |iter: &mut std::str::Split<'_, char>| -> Result<f32, LoadGraphError> {
                     iter.next()
                             .ok_or_else(|| LoadGraphError::new_with_code(line, code, IncompletePosition))?
+                        .trim()
                         .parse()
                             .map_err(|e| LoadGraphError::new_with_code(line, code, ParseFloat(e)))
                 };
