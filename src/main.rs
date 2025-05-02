@@ -28,7 +28,7 @@ impl MeasureTextEx for RaylibHandle {}
 const VERTEX_RADIUS: f32 = 8.0;
 const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
 const SAFE_ZONE: f32 = 20.0;
-const UPSCALE: f32 = 1.0;
+const UPSCALE: f32 = 2.0;
 
 fn main() {
     set_trace_log_callback(|lv, msg|
@@ -36,14 +36,18 @@ fn main() {
             | TraceLogLevel::LOG_TRACE
             | TraceLogLevel::LOG_DEBUG
             | TraceLogLevel::LOG_INFO
-                if cfg!(debug_assertions) => console_log!(lv.try_into().unwrap(), "Raylib: {msg}"),
+                => {
+                // if cfg!(debug_assertions) {
+                //     console_log!(lv.try_into().unwrap(), "Raylib: {msg}");
+                // }
+            }
 
             | TraceLogLevel::LOG_WARNING
             | TraceLogLevel::LOG_ERROR
                 => {
                 if cfg!(debug_assertions) { eprintln!("{msg}"); }
-                console_log!(lv.try_into().unwrap(), "Raylib: {msg}")
-            },
+                console_log!(lv.try_into().unwrap(), "Raylib: {msg}");
+            }
 
             TraceLogLevel::LOG_FATAL => eprintln!("{msg}"),
             _ => (),
@@ -378,8 +382,8 @@ fn main() {
                         }
                     }
 
-                    let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
-                    d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, resolution, resolution, color);
+                    // let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
+                    d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, 10, 10, color);
                     if let Some(route) = &route {
                         if let Some(Visit { parent: Some(p), .. }) = route.get_visit(v) {
                             d.draw_capsule(graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
@@ -396,23 +400,21 @@ fn main() {
 
                 d.draw_capsule((camera.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (camera.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
                 d.draw_capsule((camera.target + Vector3::new( 0.0, 0.0, -5.0))*SCALE_FACTOR, (camera.target + Vector3::new(0.0, 0.0, 5.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
-
-                // d.draw_grid(10, 100.0*SCALE_FACTOR);
             }
 
-            d.draw_rectangle_rec(Rectangle::new(mouse_tracking.x - 1.5, 0.0, 3.0, d.get_render_height() as f32), Color::new(255, 255, 255, 32));
-            d.draw_rectangle_rec(Rectangle::new(0.0, mouse_tracking.y - 1.5, d.get_render_width() as f32, 3.0), Color::new(255, 255, 255, 32));
+            d.draw_rectangle_rec(Rectangle::new((mouse_tracking.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_render_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
+            d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_tracking.y - 1.5)*UPSCALE, d.get_render_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
 
             for (v, vert) in graph.verts_iter() {
                 let pos = d.get_world_to_screen(vert.pos, camera);
                 let text = vert.alias.as_str();
                 let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
-                d.draw_text_ex(&font, text, pos - rvec2(text_size.x*0.5, font.baseSize/2), font.baseSize as f32, 0.0, Color::WHITE);
+                d.draw_text_ex(&font, text, (pos - rvec2(text_size.x*0.5, font.baseSize/2))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
                 if let Some(route) = &route {
                     if let Some(Visit { distance, parent }) = route.get_visit(v) {
                         let parent_text = parent.map_or("-", |p| &graph.vert(p).alias);
                         let text = format!("{} ({parent_text})", distance.ceil());
-                        d.draw_text_ex(&font, &text, pos + rvec2(text_size.x*0.5 + 3.0, 3), font.baseSize as f32, 0.0, Color::GRAY);
+                        d.draw_text_ex(&font, &text, (pos + rvec2(text_size.x*0.5 + 3.0, 3))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
                     }
                 }
             }
@@ -424,7 +426,7 @@ fn main() {
         // Render
         {
             let mut d = d.begin_shader_mode(&mut shader);
-            let src = Rectangle::new(0.0, 0.0, framebuffer.width() as f32*UPSCALE, -framebuffer.height() as f32*UPSCALE);
+            let src = Rectangle::new(0.0, 0.0, framebuffer.width() as f32, -framebuffer.height() as f32);
             let dst = Rectangle::new(0.0, 0.0, d.get_render_width() as f32, d.get_render_height() as f32);
             d.draw_texture_pro(&framebuffer, src, dst, Vector2::zero(), 0.0, Color::WHITE);
         }
