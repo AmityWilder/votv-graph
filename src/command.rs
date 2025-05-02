@@ -70,6 +70,11 @@ macro_rules! define_commands {
                     $(Self::$Variant => &[$(concat!($(" ", $args),*),)*],)+
                 }
             }
+            pub const fn usage(&self) -> &'static [&'static str] {
+                match self {
+                    $(Self::$Variant => &[$(concat!($input, $(" ", $args),*),)*],)+
+                }
+            }
             pub const fn description(&self) -> &'static [&'static str] {
                 match self {
                     $(Self::$Variant => &[$($description,)+],)+
@@ -169,7 +174,7 @@ impl std::fmt::Display for CmdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Self::CheckUsage(cmd) => {
-                let usage = cmd.args();
+                let usage = cmd.usage();
                 let has_multiple = usage.len() > 1;
                 write!(f, "usage:{}{}", if has_multiple { "\n    " } else { " " }, usage.join("\n    "))
             }
