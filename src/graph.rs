@@ -9,19 +9,8 @@ pub struct Vertex {
     pub pos: Vector3,
 }
 
-impl Vertex {
-    pub fn new(id: impl ToString, alias: impl ToString, x: impl AsF32, y: impl AsF32, z: impl AsF32) -> Self {
-        Self {
-            id: id.to_string(),
-            alias: alias.to_string(),
-            pos: rvec3(x, y, z),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Edge {
-    pub id: Option<String>,
     pub adj: [VertexID; 2],
     pub weight: f32,
 }
@@ -60,7 +49,7 @@ impl WeightedGraph {
         &self.verts[id as usize]
     }
 
-    pub fn vert_mut(&mut self, id: VertexID) -> &mut Vertex {
+    pub fn _vert_mut(&mut self, id: VertexID) -> &mut Vertex {
         &mut self.verts[id as usize]
     }
 
@@ -92,7 +81,6 @@ impl WeightedGraph {
     pub fn add_edge(&mut self, a: VertexID, b: VertexID) {
         let weight = self.verts[a as usize].pos.distance_to(self.verts[b as usize].pos);
         self.edges.push(Edge {
-            id: None,
             adj: [a, b],
             weight,
         });

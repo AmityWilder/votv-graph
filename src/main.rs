@@ -3,15 +3,16 @@
 
 use std::collections::VecDeque;
 use std::num::NonZeroU128;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use console::{console_log, console_read, console_write, pop_word, Cmd, Console, ConsoleLineCategory, ConsoleLineRef, EnrichEx, Tempo};
+use console::{console_log, console_read, console_write, pop_word, ConsoleLineCategory, ConsoleLineRef, EnrichEx, Tempo};
+use command::Cmd;
 use graph::WeightedGraph;
 use raylib::prelude::*;
 use route::{VertexClass, Visit};
 
 mod serialization;
 mod console;
+mod command;
 mod graph;
 mod route;
 
@@ -485,23 +486,22 @@ fn main() {
 
                 for item in console_iter {
                     use ConsoleLineCategory::*;
-                    let (color, prefix, suffix) = match item.cat {
-                        Route => (Color::RAYWHITE,  "route: ", ""),
-                        Ghost => (Color::LIGHTBLUE.alpha(0.5), ">", ""),
-                        Command => (Color::LIGHTBLUE, ">", if is_giving_command && is_cursor_shown { "_" } else { "" }),
-                        TargetList => (Color::LIME, "targets: ", ""),
-                        Trace => (Color::DARKGRAY, "trace: ", ""),
-                        Debug if is_debugging => (Color::MAGENTA, "debug: ", ""),
-                        Debug => continue,
-                        Info => (Color::LIGHTGRAY, "", ""),
-                        Warning => (Color::GOLD, "warning: ", ""),
-                        Error => (Color::RED, "err: ", ""),
-                        Fatal => (Color::SALMON, "fatal: ", ""),
+                    let (mut color, prefix) = match item.cat {
+                        Route => (Color::RAYWHITE,  "route: "),
+                        Ghost | Command => (Color::LIGHTBLUE, ">"),
+                        Trace => (Color::DARKGRAY, "trace: "),
+                        Debug => if is_debugging { (Color::MAGENTA, "debug: ") } else { continue },
+                        Info => (Color::LIGHTGRAY, ""),
+                        Warning => (Color::GOLD, "warning: "),
+                        Error => (Color::RED, "err: "),
+                        Fatal => (Color::SALMON, "fatal: "),
                     };
+                    if matches!(item.cat, Ghost) { color.a /= 2; }
+                    let cursor = if matches!(item.cat, Command) && is_giving_command && is_cursor_shown { "_" } else { "" };
                     let font_size = font.baseSize as f32;
                     let spacing = 0.0;
                     let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
-                    for line in format!("{prefix}{}{suffix}", item.msg).lines() {
+                    for line in format!("{prefix}{}{cursor}", item.msg).lines() {
                         let y = font.baseSize*line_idx;
                         for (x, text, color) in line.enrich(char_width, spacing, color) {
                             d.draw_text_ex(&font, text, Vector2::new(SAFE_ZONE + x as f32, SAFE_ZONE + y as f32), font_size, spacing, color);

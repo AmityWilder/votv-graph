@@ -279,7 +279,7 @@ fn parse_edge<'a, 'src: 'a>(
                 .map_err(|e| LoadGraphError::parse_float(line, weight_str, code, e))?
         };
 
-    Ok(Edge { id: None, adj, weight })
+    Ok(Edge { adj, weight })
 }
 
 struct VertCreation<'a, 'src: 'a> {
