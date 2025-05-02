@@ -1,4 +1,4 @@
-use std::{borrow::Cow, num::NonZeroU32, path::Path};
+use std::{borrow::Cow, num::NonZeroU32, path::Path, sync::{Mutex, MutexGuard, RwLock}};
 use raylib::prelude::*;
 use crate::{graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
 
@@ -49,6 +49,36 @@ pub enum ConsoleLineCategory {
     Warning,
     Error,
     Fatal,
+}
+
+#[derive(Debug)]
+pub struct InvalidLogLevelError(TraceLogLevel);
+
+impl std::fmt::Display for InvalidLogLevelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the TraceLogLevel `{:?}` is not intended for logging", self.0)
+    }
+}
+
+impl std::error::Error for InvalidLogLevelError {}
+
+impl TryFrom<TraceLogLevel> for ConsoleLineCategory {
+    type Error = InvalidLogLevelError;
+
+    fn try_from(value: TraceLogLevel) -> Result<Self, InvalidLogLevelError> {
+        match value {
+            TraceLogLevel::LOG_TRACE   => Ok(Self::Trace),
+            TraceLogLevel::LOG_DEBUG   => Ok(Self::Debug),
+            TraceLogLevel::LOG_INFO    => Ok(Self::Info),
+            TraceLogLevel::LOG_WARNING => Ok(Self::Warning),
+            TraceLogLevel::LOG_ERROR   => Ok(Self::Error),
+            TraceLogLevel::LOG_FATAL   => Ok(Self::Fatal),
+
+            | TraceLogLevel::LOG_ALL
+            | TraceLogLevel::LOG_NONE
+                => Err(InvalidLogLevelError(value)),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -130,25 +160,6 @@ impl Console {
         }
     }
 }
-
-macro_rules! console_write {
-    ($cons:expr, $level:ident, $($args:tt)+) => {
-        $cons.reply(
-            $crate::console::ConsoleLineCategory::$level,
-            format_args!($($args)+),
-        )
-    };
-}
-macro_rules! console_debug {
-    ($cons:expr, $level:ident, $depth:expr, $($args:tt)+) => {
-        $cons.debug(
-            $crate::console::ConsoleLineCategory::$level,
-            $depth,
-            format_args!($($args)+),
-        )
-    };
-}
-pub(crate) use {console_write, console_debug};
 
 #[derive(Debug)]
 pub enum ParseCoordsError {
@@ -362,7 +373,6 @@ impl Cmd {
     pub fn run_focus(
         graph: &WeightedGraph,
         camera: &mut Camera3D,
-        console: &mut Console,
         mut args: std::str::Split<'_, char>,
     ) -> CmdResult<()> {
         if let Some(target) = args.next() {
@@ -387,15 +397,15 @@ impl Cmd {
                 .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, camera.target, 1.0));
 
             if let Some(target) = vert {
-                console_write!(console, Info, "currently focusing vertex {}", target.id);
+                console_log!(Info, "currently focusing vertex {}", target.id);
             } else {
-                console_write!(console, Info, "no vertex is currently focused");
+                console_log!(Info, "no vertex is currently focused");
             }
             Ok(())
         }
     }
 
-    pub fn run_help(console: &mut Console) {
+    pub fn run_help() {
         let usages = Cmd::LIST.into_iter().copied()
             .flat_map(|item|
                 item.args().into_iter().copied()
@@ -420,23 +430,22 @@ impl Cmd {
             .collect::<Vec<_>>()
             .join("\n    ");
 
-        console_write!(console, Info, "{msg}");
+        console_log!(Info, "{msg}");
     }
 
     pub fn run_sv_route(
         graph: &WeightedGraph,
         route: &mut Option<RouteGenerator>,
         interactive_targets: Vec<VertexID>,
-        console: &mut Console,
         args: std::str::Split<'_, char>,
     ) -> CmdResult<bool> {
         let mut args = args.peekable();
         let targets = match args.peek() {
             Some(&("-i" | "interactive")) => {
-                console_write!(console, Info, "click each target with the mouse; order doesn't matter except that the first will be the start");
-                console_write!(console, Info, "click a target again to un-target it");
-                console_write!(console, Info, "run the command `<color=rgb(0, 150, 230)>sv.route</color>` (without arguments) when finished");
-                console.command.push_str("sv.route");
+                console_log!(Info, "click each target with the mouse; order doesn't matter except that the first will be the start");
+                console_log!(Info, "click a target again to un-target it");
+                console_log!(Info, "run the command `<color=rgb(0, 150, 230)>sv.route</color>` (without arguments) when finished");
+                console_write!().command.push_str("sv.route");
                 return Ok(false);
             }
             Some(_) => {
@@ -453,7 +462,7 @@ impl Cmd {
             return Err(CmdError::MissingArgs("targets"));
         }
         *route = Some(RouteGenerator::new(graph.verts().len(), start, target_iter));
-        console_write!(console, Info, "generating route");
+        console_log!(Info, "generating route");
         Ok(true)
     }
 
@@ -461,17 +470,16 @@ impl Cmd {
         graph: &WeightedGraph,
         route: &mut Option<RouteGenerator>,
         interactive_targets: Vec<VertexID>,
-        console: &mut Console,
         args: std::str::Split<'_, char>,
     ) -> CmdResult<bool> {
         let route = route.as_mut().ok_or(CmdError::NoExistingRoute)?;
         let mut args = args.peekable();
         let targets = match args.peek() {
             Some(&("-i" | "interactive")) => {
-                console_write!(console, Info, "click each target with the mouse; order doesn't matter");
-                console_write!(console, Info, "click a target again to un-target it");
-                console_write!(console, Info, "run the command `<color=rgb(0, 150, 230)>sv.route.add</color>` (without arguments) when finished");
-                console.command.push_str("sv.route.add");
+                console_log!(Info, "click each target with the mouse; order doesn't matter");
+                console_log!(Info, "click a target again to un-target it");
+                console_log!(Info, "run the command `<color=rgb(0, 150, 230)>sv.route.add</color>` (without arguments) when finished");
+                console_write!().command.push_str("sv.route.add");
                 return Ok(false);
             }
             Some(_) => {
@@ -484,8 +492,8 @@ impl Cmd {
         if targets.is_empty() {
             return Err(CmdError::MissingArgs("targets"));
         }
-        route.add_targets(console, targets);
-        console_write!(console, Info, "extending route");
+        route.add_targets(targets);
+        console_log!(Info, "extending route");
         Ok(true)
     }
 
@@ -493,7 +501,6 @@ impl Cmd {
         graph: &mut WeightedGraph,
         route: &mut Option<RouteGenerator>,
         camera: Camera3D,
-        console: &mut Console,
         mut args: std::str::Split<'_, char>,
     ) -> CmdResult<()> {
         let id = args.next().ok_or(CmdError::CheckUsage(Cmd::SvNew))?;
@@ -506,14 +513,13 @@ impl Cmd {
         };
         graph.add_vertex(id, alias.unwrap_or(id), pos);
         *route = None;
-        console_write!(console, Info, "created new vertex");
+        console_log!(Info, "created new vertex");
         Ok(())
     }
 
     pub fn run_sv_edge(
         graph: &mut WeightedGraph,
         route: &mut Option<RouteGenerator>,
-        console: &mut Console,
         mut args: std::str::Split<'_, char>,
     ) -> CmdResult<()> {
         let a = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
@@ -521,17 +527,16 @@ impl Cmd {
         let a = graph.find_vert(a).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
         let b = graph.find_vert(b).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
         if graph.adjacent(a).iter().any(|Adjacent { vertex, .. }| vertex == &b) {
-            console_write!(console, Warning, "vertices {a} and {b} are already connected");
+            console_log!(Warning, "vertices {a} and {b} are already connected");
         } else {
             graph.add_edge(a, b);
             *route = None;
-            console_write!(console, Info, "created an edge connecting vertices {a} and {b}");
+            console_log!(Info, "created an edge connecting vertices {a} and {b}");
         }
         Ok(())
     }
 
     pub fn run_tempo(
-        console: &mut Console,
         mut args: std::str::Split<'_, char>,
         tempo: &mut Tempo,
     ) -> CmdResult<()> {
@@ -553,9 +558,9 @@ impl Cmd {
             } else {
                 return Err(CmdError::CheckUsage(Cmd::Tempo));
             }
-            console_write!(console, Info, "set tempo to {tempo}");
+            console_log!(Info, "set tempo to {tempo}");
         } else {
-            console_write!(console, Info, "current tempo is {tempo}");
+            console_log!(Info, "current tempo is {tempo}");
         }
         Ok(())
     }
@@ -563,7 +568,6 @@ impl Cmd {
     pub fn run_sv_load(
         graph: &mut WeightedGraph,
         route: &mut Option<RouteGenerator>,
-        console: &mut Console,
         mut args: std::str::Split<'_, char>,
     ) -> CmdResult<()> {
         if let Some(path_str) = args.next() {
@@ -571,7 +575,7 @@ impl Cmd {
             let mem = std::fs::read_to_string(path)?;
             *graph = WeightedGraph::load_from_memory(mem).map_err(|e| CmdError::LoadGraphFailed(e))?;
             *route = None;
-            console_write!(console, Info, "graph loaded from \"{path_str}\"");
+            console_log!(Info, "graph loaded from \"{path_str}\"");
             Ok(())
         } else {
             Err(CmdError::CheckUsage(Cmd::SvLoad))
@@ -580,14 +584,13 @@ impl Cmd {
 
     pub fn run_sv_save(
         graph: &mut WeightedGraph,
-        console: &mut Console,
         mut args: std::str::Split<'_, char>,
     ) -> CmdResult<()> {
         if let Some(path_str) = args.next() {
             let path = Path::new(path_str);
             let mem = WeightedGraph::save_to_memory(&graph);
             std::fs::write(path, mem)?;
-            console_write!(console, Info, "graph saved to \"{path_str}\"");
+            console_log!(Info, "graph saved to \"{path_str}\"");
             Ok(())
         } else {
             Err(CmdError::CheckUsage(Cmd::SvLoad))
@@ -694,3 +697,46 @@ pub fn pop_word(s: &mut String) {
         }
     }
 }
+
+pub static CONSOLE: RwLock<Console> = RwLock::new(Console::new());
+
+macro_rules! console_read {
+    () => { $crate::console::CONSOLE.read().unwrap() };
+}
+macro_rules! console_write {
+    () => { $crate::console::CONSOLE.write().unwrap() };
+}
+
+macro_rules! console_log {
+    ($level:ident, $($args:tt)+) => {
+        $crate::console::CONSOLE.write().unwrap().reply(
+            $crate::console::ConsoleLineCategory::$level,
+            format_args!($($args)+),
+        )
+    };
+    ($level:expr, $($args:tt)+) => {
+        $crate::console::CONSOLE.write().unwrap().reply(
+            $level,
+            format_args!($($args)+),
+        )
+    };
+}
+
+macro_rules! console_dbg {
+    ($level:ident, $depth:expr, $($args:tt)+) => {
+        $crate::console::CONSOLE.write().unwrap().debug(
+            $crate::console::ConsoleLineCategory::$level,
+            $depth,
+            format_args!($($args)+),
+        )
+    };
+    ($level:expr, $depth:expr, $($args:tt)+) => {
+        $crate::console::CONSOLE.write().unwrap().debug(
+            $level,
+            $depth,
+            format_args!($($args)+),
+        )
+    };
+}
+
+pub(crate) use {console_read, console_write, console_log, console_dbg};
