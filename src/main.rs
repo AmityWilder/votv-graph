@@ -1,10 +1,9 @@
-#![windows_subsystem = "windows"]
-#![feature(substr_range, str_split_remainder, assert_matches)]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![feature(substr_range, str_split_remainder, assert_matches, iter_next_chunk)]
 
-use std::collections::VecDeque;
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
-use console::{console_log, console_read, console_write, pop_word, ConsoleLineCategory, ConsoleLineRef, EnrichEx, Tempo};
+use console::{cin, console_log, cout, enrich::EnrichEx, Tempo};
 use command::Cmd;
 use graph::WeightedGraph;
 use raylib::prelude::*;
@@ -55,9 +54,6 @@ fn main() {
         })
         .unwrap();
 
-    let mut is_giving_command = true;
-    let mut command_history: VecDeque<String> = VecDeque::new();
-    let mut command_history_offset = 0;
     let mut is_debugging = false;
 
     let mut graph = WeightedGraph::load_from_memory(include_str!("resources/votv.graph"))
@@ -79,8 +75,6 @@ fn main() {
 
     let mut is_cursor_shown = false;
     let mut cursor_last_toggled = Instant::now();
-
-    let mut backspace_pressed = None;
 
     let mut interactive_targets = Vec::new();
     let mut is_giving_interactive_targets = false;
@@ -135,137 +129,91 @@ fn main() {
         mouse_tracking = mouse_tracking.lerp(mouse_snapped, 1.0);
 
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
-            is_giving_command = false;
+            cin().unfocus();
             // console.command.clear();
         }
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
-            if !is_giving_command {
+            if cin().is_focused() {
+                // finish giving command
+                let mut c_in = cin();
+                if let Some(cmd_args) = c_in.submit_cmd() {
+                    match cmd_args {
+                        Ok((cmd, args)) => {
+                            let result = match cmd {
+                                Cmd::Help => Ok(Cmd::run_help()),
+                                Cmd::SvRoute => match Cmd::run_sv_route(&graph, &mut route, std::mem::take(&mut interactive_targets), args) {
+                                    Ok(is_ready) => {
+                                        is_giving_interactive_targets = !is_ready;
+                                        if is_giving_interactive_targets {
+                                            cin().unfocus();
+                                        }
+                                        Ok(())
+                                    },
+                                    Err(e) => {
+                                        is_giving_interactive_targets = false;
+                                        Err(e)
+                                    }
+                                }
+                                Cmd::SvRouteAdd => match Cmd::run_sv_route_add(&graph, &mut route, std::mem::take(&mut interactive_targets), args) {
+                                    Ok(is_ready) => {
+                                        is_giving_interactive_targets = !is_ready;
+                                        if is_giving_interactive_targets {
+                                            cin().unfocus();
+                                        }
+                                        Ok(())
+                                    }
+                                    Err(e) => {
+                                        is_giving_interactive_targets = false;
+                                        Err(e)
+                                    }
+                                }
+                                Cmd::SvRouteClear => {
+                                    route = None;
+                                    Ok(console_log!(Info, "route cleared"))
+                                },
+                                Cmd::SvNew => Cmd::run_sv_new(&mut graph, &mut route, camera, args),
+                                Cmd::SvEdge => Cmd::run_sv_edge(&mut graph, &mut route, args),
+                                Cmd::SvLoad => Cmd::run_sv_load(&mut graph, &mut route, args),
+                                Cmd::SvSave => Cmd::run_sv_save(&mut graph, args),
+                                Cmd::Tempo => Cmd::run_tempo(args, &mut tempo),
+                                Cmd::Dbg => {
+                                    is_debugging = !is_debugging;
+                                    Ok(console_log!(Info, "debugging is now {}", if is_debugging { "on" } else { "off" }))
+                                }
+                                Cmd::Focus => Cmd::run_focus(&graph, &mut camera, args),
+                                Cmd::Close => break 'window,
+                            };
+                            if let Err(e) = result {
+                                use std::error::Error;
+                                use std::fmt::Write;
+                                let mut indent = 0;
+                                let mut e: &dyn Error = &e;
+                                let mut msg = e.to_string();
+                                while let Some(src) = e.source() {
+                                    indent += 1;
+                                    write!(msg, "\n{:1$}{src}", "", 2*indent).unwrap();
+                                    e = src;
+                                }
+                                console_log!(Error, "{msg}");
+                            }
+                        }
+                        Err(e) => console_log!(Error, "{e}"),
+                    }
+                }
+            } else {
                 // begin giving command
-                is_giving_command = true;
+                cin().focus();
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
                 // console.command.clear();
-            } else {
-                // finish giving command
-                if !console_read!().command.is_empty() {
-                    command_history.push_front(std::mem::take(&mut console_write!().command));
-                    command_history_offset = command_history.len();
-                    let mut args = command_history.front().unwrap().split(' ');
-
-                    console_write!().reply.clear();
-                    if let Some(cmd) = args.next() {
-                        match Cmd::try_from_str(cmd) {
-                            Ok(cmd) => {
-                                let result = match cmd {
-                                    Cmd::Help => Ok(Cmd::run_help()),
-                                    Cmd::SvRoute => match Cmd::run_sv_route(&graph, &mut route, std::mem::take(&mut interactive_targets), args) {
-                                        Ok(is_ready) => {
-                                            is_giving_interactive_targets = !is_ready;
-                                            if is_giving_interactive_targets {
-                                                is_giving_command = false;
-                                            }
-                                            Ok(())
-                                        },
-                                        Err(e) => {
-                                            is_giving_interactive_targets = false;
-                                            Err(e)
-                                        }
-                                    }
-                                    Cmd::SvRouteAdd => match Cmd::run_sv_route_add(&graph, &mut route, std::mem::take(&mut interactive_targets), args) {
-                                        Ok(is_ready) => {
-                                            is_giving_interactive_targets = !is_ready;
-                                            if is_giving_interactive_targets {
-                                                is_giving_command = false;
-                                            }
-                                            Ok(())
-                                        }
-                                        Err(e) => {
-                                            is_giving_interactive_targets = false;
-                                            Err(e)
-                                        }
-                                    }
-                                    Cmd::SvRouteClear => {
-                                        route = None;
-                                        Ok(console_log!(Info, "route cleared"))
-                                    },
-                                    Cmd::SvNew => Cmd::run_sv_new(&mut graph, &mut route, camera, args),
-                                    Cmd::SvEdge => Cmd::run_sv_edge(&mut graph, &mut route, args),
-                                    Cmd::SvLoad => Cmd::run_sv_load(&mut graph, &mut route, args),
-                                    Cmd::SvSave => Cmd::run_sv_save(&mut graph, args),
-                                    Cmd::Tempo => Cmd::run_tempo(args, &mut tempo),
-                                    Cmd::Dbg => {
-                                        is_debugging = !is_debugging;
-                                        Ok(console_log!(Info, "debugging is now {}", if is_debugging { "on" } else { "off" }))
-                                    }
-                                    Cmd::Focus => Cmd::run_focus(&graph, &mut camera, args),
-                                    Cmd::Close => break 'window,
-                                };
-                                if let Err(e) = result {
-                                    use std::error::Error;
-                                    use std::fmt::Write;
-                                    let mut indent = 0;
-                                    let mut e: &dyn Error = &e;
-                                    let mut msg = e.to_string();
-                                    while let Some(src) = e.source() {
-                                        indent += 1;
-                                        write!(msg, "\n{:1$}{src}", "", 2*indent).unwrap();
-                                        e = src;
-                                    }
-                                    console_log!(Error, "{msg}");
-                                }
-                            }
-
-                            Err(cmd) => {
-                                console_log!(Error, "no such command: `{cmd}`");
-                            }
-                        }
-                    }
-                }
             }
         }
 
-        if rl.is_key_released(KeyboardKey::KEY_BACKSPACE) {
-            backspace_pressed = None;
-        }
+        let is_console_changed = cin().update_input(&mut rl);
 
-        if is_giving_command {
-            let mut force_blink = true;
-            if let Some(ch) = rl.get_char_pressed() {
-                console_write!().command.push(ch);
-            } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
-                backspace_pressed = Some(Instant::now());
-                if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL) {
-                    pop_word(&mut console_write!().command);
-                } else {
-                    console_write!().command.pop();
-                }
-            } else if let Some(pressed_time) = &mut backspace_pressed {
-                const DELAY: Duration = Duration::from_millis(550);
-                const REP: Duration = Duration::from_millis(33);
-                if pressed_time.elapsed() >= DELAY {
-                    *pressed_time = Instant::now() - DELAY + REP;
-                    if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL) {
-                        pop_word(&mut console_write!().command);
-                    } else {
-                        console_write!().command.pop();
-                    }
-                }
-            } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
-                command_history_offset = if command_history_offset + 1 < command_history.len() + 1 { command_history_offset + 1 } else { 0 };
-                console_write!().command = command_history.get(command_history_offset).cloned().unwrap_or_default();
-            } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
-                command_history_offset = command_history_offset.checked_sub(1).unwrap_or(command_history.len() + 1 - 1);
-                console_write!().command = command_history.get(command_history_offset).cloned().unwrap_or_default();
-            } else if rl.is_key_pressed(KeyboardKey::KEY_V) && (rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)) {
-                if let Ok(clipboard) = rl.get_clipboard_text() {
-                    console_write!().command.push_str(&clipboard);
-                }
-            } else {
-                force_blink = false;
-            }
-
+        if cin().is_focused() {
             const BLINK_TIME: Duration = Duration::from_millis(500);
-            if force_blink {
+            if is_console_changed {
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now() - BLINK_TIME / 2;
             } else if cursor_last_toggled.elapsed() >= BLINK_TIME {
@@ -434,7 +382,7 @@ fn main() {
 
         // Console
         {
-            if !is_giving_command {
+            if !cin().is_focused() {
                 d.draw_text_ex(
                     &font,
                     "use W/A/S/D to pan, Q/E to zoom, and R/F/Z/X to orbit",
@@ -447,7 +395,7 @@ fn main() {
 
             d.draw_text_ex(
                 &font,
-                if is_giving_command {
+                if cin().is_focused() {
                     "press ENTER to run the command, or ESCAPE to cancel"
                 } else {
                     "press ENTER to begin typing a command"
@@ -468,46 +416,26 @@ fn main() {
             );
 
             {
-                let term = console_read!();
-                let mut line_idx = 0;
+                let font_size = font.baseSize as f32;
+                let spacing = 0.0;
+                let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
+                let max_lines = ((d.get_render_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
 
-                let max_lines = ((d.get_render_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 4.0).floor().max(0.0) as usize;
-                let skip_lines = (command_history.len().min(4) + term.reply.len()).saturating_sub(max_lines);
+                let (c_out, c_in) = (cout(), cin());
 
-                let console_iter =
-                    command_history.iter()
-                        .take(4)
-                        .rev()
-                        .map(|item| ConsoleLineRef::ghost(item))
-                    .chain(term.reply.iter().map(|item| item.as_line_ref()))
-                    .skip(skip_lines)
-                    .chain(std::iter::once_with(|| ConsoleLineRef::command(&term.command)))
-                    .chain(is_debugging.then(|| term.debug.iter().map(|item| item.as_line_ref())).into_iter().flatten());
-
-                for item in console_iter {
-                    use ConsoleLineCategory::*;
-                    let (mut color, prefix) = match item.cat {
-                        Route => (Color::RAYWHITE,  "route: "),
-                        Ghost | Command => (Color::LIGHTBLUE, ">"),
-                        Trace => (Color::DARKGRAY, "trace: "),
-                        Debug => if is_debugging { (Color::MAGENTA, "debug: ") } else { continue },
-                        Info => (Color::LIGHTGRAY, ""),
-                        Warning => (Color::GOLD, "warning: "),
-                        Error => (Color::RED, "err: "),
-                        Fatal => (Color::SALMON, "fatal: "),
-                    };
-                    if matches!(item.cat, Ghost) { color.a /= 2; }
-                    let cursor = if matches!(item.cat, Command) && is_giving_command && is_cursor_shown { "_" } else { "" };
-                    let font_size = font.baseSize as f32;
-                    let spacing = 0.0;
-                    let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
-                    for line in format!("{prefix}{}{cursor}", item.msg).lines() {
-                        let y = font.baseSize*line_idx;
-                        for (x, text, color) in line.enrich(char_width, spacing, color) {
-                            d.draw_text_ex(&font, text, Vector2::new(SAFE_ZONE + x as f32, SAFE_ZONE + y as f32), font_size, spacing, color);
-                        }
-                        line_idx += 1;
-                    }
+                for (v, text, color) in c_out.sample(
+                    &c_in,
+                    is_debugging,
+                    c_in.is_focused() && is_cursor_shown,
+                    max_lines,
+                ).enrich(
+                    Vector2::new(SAFE_ZONE, SAFE_ZONE),
+                    font_size,
+                    char_width,
+                    spacing,
+                    Color::WHITE,
+                ) {
+                    d.draw_text_ex(&font, text, v, font_size, spacing, color);
                 }
             }
         }

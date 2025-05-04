@@ -1,8 +1,6 @@
 use std::{num::NonZeroU32, path::Path};
-
 use raylib::prelude::*;
-
-use crate::{console::Tempo, console_log, console_write, graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
+use crate::{console::{cin, Tempo}, console_log, graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
 
 #[derive(Debug)]
 pub enum ParseCoordsError {
@@ -33,6 +31,19 @@ pub fn parse_coords(coords: &str) -> Result<Vector3, ParseCoordsError> {
     Ok(Vector3::new(x, 0.0, y))
 }
 
+#[derive(Debug)]
+pub enum FromCmdError {
+    Unknown(String),
+}
+impl std::fmt::Display for FromCmdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown(cmd) => write!(f, "no such command: `{cmd}`"),
+        }
+    }
+}
+impl std::error::Error for FromCmdError {}
+
 macro_rules! define_commands {
     (
         $(#[$enum_meta:meta])*
@@ -54,10 +65,10 @@ macro_rules! define_commands {
             pub const LIST: &[Self] = &[
                 $(Self::$Variant,)+
             ];
-            pub fn try_from_str(s: &str) -> Result<Self, &str> {
+            pub fn try_from_str(s: &str) -> Result<Self, FromCmdError> {
                 match s {
                     $($input => Ok(Self::$Variant),)+
-                    _ => Err(s),
+                    _ => Err(FromCmdError::Unknown(s.to_string())),
                 }
             }
             pub const fn input(&self) -> &'static str {
@@ -259,7 +270,7 @@ impl Cmd {
                 item.args().into_iter().copied()
                     .map(move |args| (item.input(), args))
             )
-            .map(|(input, args)| format!("<color=rgb(0, 150, 230)>{input}</color><color=rgb(0, 120, 185)>{args}</color>"))
+            .map(|(input, args)| format!("<color = #0096e6>{input}</color><color = #0096e6aa>{args}</color>"))
             .collect::<Vec<_>>();
 
         let width = usages.iter()
@@ -273,7 +284,7 @@ impl Cmd {
             .map(|(usage, desc)| format!("{usage:<0$}  {desc}", width))
             .collect::<Vec<_>>();
 
-        let msg = std::iter::once("<color=rgb(72, 241, 157)>Commands:</color>")
+        let msg = std::iter::once("<color = #48f19d>Commands:</color>")
             .chain(lines.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join("\n    ");
@@ -292,8 +303,8 @@ impl Cmd {
             Some(&("-i" | "interactive")) => {
                 console_log!(Info, "click each target with the mouse; order doesn't matter except that the first will be the start");
                 console_log!(Info, "click a target again to un-target it");
-                console_log!(Info, "run the command `<color=rgb(0, 150, 230)>sv.route</color>` (without arguments) when finished");
-                console_write!().command.push_str("sv.route");
+                console_log!(Info, "run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished");
+                cin().current.push_str("sv.route");
                 return Ok(false);
             }
             Some(_) => {
@@ -326,8 +337,8 @@ impl Cmd {
             Some(&("-i" | "interactive")) => {
                 console_log!(Info, "click each target with the mouse; order doesn't matter");
                 console_log!(Info, "click a target again to un-target it");
-                console_log!(Info, "run the command `<color=rgb(0, 150, 230)>sv.route.add</color>` (without arguments) when finished");
-                console_write!().command.push_str("sv.route.add");
+                console_log!(Info, "run the command `<color = #0096e6>sv.route.add</color>` (without arguments) when finished");
+                cin().current.push_str("sv.route.add");
                 return Ok(false);
             }
             Some(_) => {

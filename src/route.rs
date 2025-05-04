@@ -1,5 +1,5 @@
 use std::{collections::VecDeque, time::{Duration, Instant}};
-use crate::{console::{console_dbg, console_log, console_write}, graph::{Adjacent, VertexID, WeightedGraph}};
+use crate::{console::{console_dbg, console_log}, graph::{Adjacent, VertexID, WeightedGraph}};
 
 pub enum Phase {
     None,
@@ -204,7 +204,6 @@ impl RouteGenerator {
                             .map(|&v| graph.vert(v).id.as_str())
                             .collect::<Vec<&str>>()
                             .join(" - ");
-                        console_write!().reply.clear();
                         console_log!(Route, "{final_route}");
                         self.is_finished = true;
                         let mut distance = 0.0;

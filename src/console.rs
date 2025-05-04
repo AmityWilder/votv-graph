@@ -1,5 +1,79 @@
-use std::{borrow::Cow, num::NonZeroU32, sync::RwLock};
+use std::{collections::VecDeque, num::NonZeroU32, sync::{Mutex, MutexGuard}, time::{Duration, Instant}};
 use raylib::prelude::*;
+use crate::command::{Cmd, FromCmdError};
+
+pub mod enrich;
+
+pub static CIN: Mutex<ConsoleIn> = Mutex::new(ConsoleIn::new());
+
+pub struct Cin<'a> {
+    inner: MutexGuard<'a, ConsoleIn>,
+}
+impl std::ops::Deref for Cin<'_> {
+    type Target = ConsoleIn;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for Cin<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+pub fn cin() -> Cin<'static> {
+    Cin { inner: CIN.lock().unwrap() }
+}
+
+pub static COUT: Mutex<ConsoleOut> = Mutex::new(ConsoleOut::new());
+
+pub struct Cout<'a> {
+    inner: MutexGuard<'a, ConsoleOut>,
+}
+impl std::ops::Deref for Cout<'_> {
+    type Target = ConsoleOut;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for Cout<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+pub fn cout() -> Cout<'static> {
+    Cout { inner: COUT.lock().unwrap() }
+}
+
+macro_rules! console_log {
+    ($level:ident, $($args:tt)+) => {
+        $crate::console::console_log!($crate::console::ConsoleLineCategory::$level, $($args)+)
+    };
+    ($level:expr, $first:literal $($args:tt)*) => {
+        $crate::console::cout().log(
+            $level,
+            format_args!($first $($args)*),
+        )
+    };
+}
+
+macro_rules! console_dbg {
+    ($level:ident, $depth:expr, $($args:tt)+) => {
+        $crate::console::console_dbg!($crate::console::ConsoleLineCategory::$level, $depth, $($args)+)
+    };
+    ($level:expr, $depth:expr, $($args:tt)+) => {
+        $crate::console::cout().dbg(
+            $level,
+            $depth,
+            format_args!($($args)+),
+        )
+    };
+}
+
+pub(crate) use {console_log, console_dbg};
 
 pub enum Tempo {
     Sync,
@@ -49,6 +123,23 @@ pub enum ConsoleLineCategory {
     Fatal,
 }
 
+impl ConsoleLineCategory {
+    const fn color_prefix(self) -> (Color, &'static str) {
+        let (mut c, pre) = match self {
+            Self::Route   => (Color::RAYWHITE,  "route: "  ),
+            Self::Ghost | Self::Command => (Color::LIGHTBLUE, ">"),
+            Self::Trace   => (Color::DARKGRAY,  "trace: "  ),
+            Self::Debug   => (Color::MAGENTA,   "debug: "  ),
+            Self::Info    => (Color::LIGHTGRAY, ""         ),
+            Self::Warning => (Color::GOLD,      "warning: "),
+            Self::Error   => (Color::RED,       "err: "    ),
+            Self::Fatal   => (Color::SALMON,    "fatal: "  ),
+        };
+        if matches!(self, Self::Ghost) { c.a /= 2; }
+        (c, pre)
+    }
+}
+
 #[derive(Debug)]
 pub struct InvalidLogLevelError(TraceLogLevel);
 
@@ -79,146 +170,180 @@ impl TryFrom<TraceLogLevel> for ConsoleLineCategory {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ConsoleLine {
-    pub cat: ConsoleLineCategory,
-    pub msg: String,
+pub struct ConsoleIn {
+    backspace_pressed: Option<Instant>,
+    history: VecDeque<String>,
+    history_offset: usize,
+    is_focused: bool,
+    pub current: String,
 }
 
-impl ConsoleLine {
-    pub fn as_line_ref(&self) -> ConsoleLineRef<'_> {
-        ConsoleLineRef::new(self.cat, &self.msg)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ConsoleLineRef<'a> {
-    pub cat: ConsoleLineCategory,
-    pub msg: Cow<'a, str>,
-}
-
-impl<'a> ConsoleLineRef<'a> {
-    pub fn new(cat: ConsoleLineCategory, msg: &'a str) -> Self {
-        Self {
-            cat,
-            msg: Cow::Borrowed(msg),
-        }
-    }
-
-    pub fn ghost(msg: &'a str) -> Self {
-        Self::new(ConsoleLineCategory::Ghost, msg)
-    }
-    pub fn command(msg: &'a str) -> Self {
-        Self::new(ConsoleLineCategory::Command, msg)
-    }
-}
-
-pub struct Console {
-    pub command: String,
-    pub reply: Vec<ConsoleLine>,
-    pub debug: Vec<ConsoleLine>,
-}
-
-impl Console {
+impl ConsoleIn {
     pub const fn new() -> Self {
         Self {
-            command: String::new(),
-            reply: Vec::new(),
-            debug: Vec::new(),
+            backspace_pressed: None,
+            history: VecDeque::new(),
+            history_offset: 0,
+            is_focused: true,
+            current: String::new(),
         }
     }
 
-    pub fn reply(&mut self, cat: ConsoleLineCategory, msg: std::fmt::Arguments<'_>) {
-        self.reply.push(ConsoleLine { cat, msg: msg.to_string() });
+    #[inline]
+    pub fn is_focused(&self) -> bool {
+        self.is_focused
     }
 
-    pub fn debug(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
-        while self.debug.len() > depth {
-            self.debug.pop();
+    #[inline]
+    pub fn focus(&mut self) {
+        self.is_focused = true;
+        self.backspace_pressed = None;
+    }
+
+    #[inline]
+    pub fn unfocus(&mut self) {
+        self.is_focused = false;
+    }
+
+    /// Returns true on change
+    pub fn update_input(&mut self, rl: &mut RaylibHandle) -> bool {
+        if rl.is_key_released(KeyboardKey::KEY_BACKSPACE) {
+            self.backspace_pressed = None;
         }
-        if self.debug.len() == depth {
-            self.debug.push(ConsoleLine { cat, msg: msg.to_string() });
-        } else {
-            panic!("cannot push more than one depth (current depth: {}, write depth: {})\nconsole: {:?}\nwanted to print: \"{:?}\"",
-                self.debug.len() as isize - 1,
-                depth,
-                &self.debug,
-                msg,
-            );
-        }
-    }
-}
 
-pub struct Enrich<'a> {
-    line: &'a str,
-    char_width: f32,
-    spacing: f32,
-    color: Color,
-    x: f32,
-    upcoming: Option<<Self as Iterator>::Item>,
-}
-impl<'a> Enrich<'a> {
-    pub fn new(line: &'a str, char_width: f32, spacing: f32, color: Color) -> Self {
-        Self {
-            line,
-            char_width,
-            spacing,
-            color,
-            x: 0.0,
-            upcoming: None,
-        }
-    }
-}
+        if self.is_focused {
+            let mut is_changed = true;
 
-pub trait EnrichEx: AsRef<str> {
-    fn enrich(&self, char_width: f32, spacing: f32, color: Color) -> Enrich<'_> {
-        Enrich::new(self.as_ref(), char_width, spacing, color)
-    }
-}
-impl EnrichEx for str {}
-
-impl<'a> Iterator for Enrich<'a> {
-    type Item = (f32, &'a str, Color);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.upcoming.is_some() {
-            self.upcoming.take()
-        } else {
-            let mut pre;
-            let mut rest = self.line;
-            while let Some(color_start) = rest.find("<color=rgb(") {
-                (pre, rest) = rest.split_at(color_start);
-                if let Some(element_len) = rest.find(")>") {
-                    let element = &rest[..element_len];
-                    let rest = &rest[element_len + ")>".len()..];
-                    let color_str = &element["<color=rgb(".len()..];
-                    if color_str.len() <= "255, 255, 255".len() {
-                        let mut color_iter = color_str.split(',').flat_map(|s| s.trim().parse::<u8>());
-                        let r = color_iter.next();
-                        let g = color_iter.next();
-                        let b = color_iter.next();
-                        if let (Some(r), Some(g), Some(b)) = (r, g, b) {
-                            if let Some(colored_len) = rest.find("</color>") {
-                                let colored = &rest[..colored_len];
-                                self.line = &rest[colored_len + "</color>".len()..];
-
-                                let item = (self.x, pre, self.color);
-                                self.x += self.char_width*pre.len() as f32 + self.spacing*(pre.len() as f32 - 1.0);
-                                self.upcoming = Some((self.x, colored, Color::new(r, g, b, 255)));
-                                self.x += self.char_width*colored.len() as f32 + self.spacing*(colored.len() as f32 - 1.0);
-                                return Some(item);
-                            }
-                        }
+            if let Some(ch) = rl.get_char_pressed() {
+                self.current.push(ch);
+            } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
+                self.backspace_pressed = Some(Instant::now());
+                if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL) {
+                    pop_word(&mut self.current);
+                } else {
+                    self.current.pop();
+                }
+            } else if let Some(pressed_time) = &mut self.backspace_pressed {
+                const DELAY: Duration = Duration::from_millis(550);
+                const REP: Duration = Duration::from_millis(33);
+                if pressed_time.elapsed() >= DELAY {
+                    *pressed_time = Instant::now() - DELAY + REP;
+                    if rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL) {
+                        pop_word(&mut self.current);
+                    } else {
+                        self.current.pop();
                     }
                 }
-                rest = &rest[color_start + 1..];
-            }
-            if !self.line.is_empty() {
-                Some((self.x, std::mem::replace(&mut self.line, ""), self.color))
+            } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
+                self.history_offset = if self.history_offset + 1 < self.history.len() + 1 { self.history_offset + 1 } else { 0 };
+                self.current = self.history.get(self.history_offset).cloned().unwrap_or_default();
+            } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
+                self.history_offset = self.history_offset.checked_sub(1).unwrap_or(self.history.len() + 1 - 1);
+                self.current = self.history.get(self.history_offset).cloned().unwrap_or_default();
+            } else if rl.is_key_pressed(KeyboardKey::KEY_V) && (rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)) {
+                if let Ok(clipboard) = rl.get_clipboard_text() {
+                    self.current.push_str(&clipboard);
+                }
             } else {
-                None
+                is_changed = false;
             }
+            is_changed
+        } else { false }
+    }
+
+    pub fn submit_cmd(&mut self) -> Option<Result<(Cmd, std::str::Split<'_, char>), FromCmdError>> {
+        (!self.current.is_empty())
+            .then(|| {
+                let msg = std::mem::take(&mut self.current);
+                self.history.push_front(msg.clone());
+                self.history_offset = self.history.len();
+                console_log!(Ghost, "{msg}");
+                self.history.front()
+                    .expect("should have at least one element after push")
+                    .split(' ')
+            })
+            .and_then(|mut args|
+                args.next()
+                    .map(|first| (first, args))
+            )
+            .map(|(cmd_str, args)|
+                Cmd::try_from_str(cmd_str)
+                    .map(|cmd| (cmd, args))
+            )
+    }
+}
+
+pub struct ConsoleOut {
+    log: String,
+    dbg: Vec<String>,
+}
+
+impl ConsoleOut {
+    pub const fn new() -> Self {
+        Self {
+            log: String::new(),
+            dbg: Vec::new(),
         }
+    }
+
+    pub fn log(&mut self, cat: ConsoleLineCategory, msg: std::fmt::Arguments<'_>) {
+        use std::fmt::Write;
+        let (Color { r, g, b, a }, pre) = cat.color_prefix();
+        _ = writeln!(self.log, "<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>");
+    }
+
+    fn _log_lines(&self) -> std::str::Lines<'_> {
+        self.log.lines()
+    }
+
+    pub fn dbg(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
+        self.dbg.truncate(depth);
+
+        assert_eq!(self.dbg.len(), depth,
+            "cannot push more than one depth (current depth: {}, write depth: {})\nconsole: {:?}\nwanted to print: \"{:?}\"",
+            self.dbg.len() as isize - 1,
+            depth,
+            &self.dbg,
+            msg,
+        );
+
+        let (Color { r, g, b, a }, pre) = cat.color_prefix();
+        self.dbg.push(format!("<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>"));
+    }
+
+    fn dbg_lines(&self) -> impl DoubleEndedIterator<Item = &'_ str> + Clone {
+        self.dbg.iter()
+            .map(String::as_str)
+            .flat_map(str::lines)
+    }
+
+    pub fn sample(
+        &self,
+        c_in: &ConsoleIn,
+        is_debugging: bool,
+        show_cursor: bool,
+        mut max_history_lines: usize,
+    ) -> String {
+        let (Color { r, g, b, a }, pre) = ConsoleLineCategory::Command.color_prefix();
+        let cmd_string = format!("<color=rgba({r},{g},{b},{a})>{pre}{}{}</color>", &c_in.current, if show_cursor { "_" } else { "" });
+        let command = std::iter::once(cmd_string.as_str());
+
+        let log_lines = self.log.lines().count();
+        let log_skipped = log_lines.saturating_sub(max_history_lines);
+        max_history_lines = max_history_lines.saturating_sub(log_skipped);
+
+        let log = self.log.lines()
+            .skip(log_skipped);
+
+        let dbg_lines = self.dbg_lines().count();
+        let debug_skipped = dbg_lines.saturating_sub(if is_debugging { max_history_lines } else { 0 });
+
+        let debug = self.dbg_lines()
+            .skip(debug_skipped);
+
+        log.chain(debug).chain(command)
+            .collect::<Vec<&str>>()
+            .join("\n")
     }
 }
 
@@ -248,46 +373,3 @@ pub fn pop_word(s: &mut String) {
         }
     }
 }
-
-pub static CONSOLE: RwLock<Console> = RwLock::new(Console::new());
-
-macro_rules! console_read {
-    () => { $crate::console::CONSOLE.read().unwrap() };
-}
-macro_rules! console_write {
-    () => { $crate::console::CONSOLE.write().unwrap() };
-}
-
-macro_rules! console_log {
-    ($level:ident, $($args:tt)+) => {
-        $crate::console::CONSOLE.write().unwrap().reply(
-            $crate::console::ConsoleLineCategory::$level,
-            format_args!($($args)+),
-        )
-    };
-    ($level:expr, $($args:tt)+) => {
-        $crate::console::CONSOLE.write().unwrap().reply(
-            $level,
-            format_args!($($args)+),
-        )
-    };
-}
-
-macro_rules! console_dbg {
-    ($level:ident, $depth:expr, $($args:tt)+) => {
-        $crate::console::CONSOLE.write().unwrap().debug(
-            $crate::console::ConsoleLineCategory::$level,
-            $depth,
-            format_args!($($args)+),
-        )
-    };
-    ($level:expr, $depth:expr, $($args:tt)+) => {
-        $crate::console::CONSOLE.write().unwrap().debug(
-            $level,
-            $depth,
-            format_args!($($args)+),
-        )
-    };
-}
-
-pub(crate) use {console_read, console_write, console_log, console_dbg};
