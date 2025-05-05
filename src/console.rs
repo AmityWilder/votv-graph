@@ -170,8 +170,23 @@ impl TryFrom<TraceLogLevel> for ConsoleLineCategory {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum KeyOrChar {
+    Char(char),
+    Key(KeyboardKey),
+}
+
+impl KeyOrChar {
+    pub fn to_key(self) -> Option<KeyboardKey> {
+        match self {
+            KeyOrChar::Char(c) => key_from_i32(c as i32),
+            KeyOrChar::Key(k) => Some(k),
+        }
+    }
+}
+
 pub struct ConsoleIn {
-    backspace_pressed: Option<Instant>,
+    last_keypress: Option<(KeyOrChar, Instant)>,
     history: VecDeque<String>,
     history_offset: usize,
     is_focused: bool,
@@ -186,7 +201,7 @@ pub struct ConsoleIn {
 impl ConsoleIn {
     pub const fn new() -> Self {
         Self {
-            backspace_pressed: None,
+            last_keypress: None,
             history: VecDeque::new(),
             history_offset: 0,
             is_focused: true,
@@ -205,15 +220,6 @@ impl ConsoleIn {
     #[inline]
     pub const fn mark_clean(&mut self) {
         self.is_dirty = false;
-    }
-
-    #[inline]
-    const fn minmax_selection(&self) -> (&usize, &usize) {
-        if self.selection_head <= self.selection_tail {
-            (&self.selection_head, &self.selection_tail)
-        } else {
-            (&self.selection_tail, &self.selection_head)
-        }
     }
 
     #[inline]
@@ -243,7 +249,7 @@ impl ConsoleIn {
     #[inline]
     pub const fn focus(&mut self) {
         self.is_focused = true;
-        self.backspace_pressed = None;
+        self.last_keypress = None;
     }
 
     #[inline]
@@ -281,59 +287,120 @@ impl ConsoleIn {
         self.insert_over_selection(ch.encode_utf8(&mut buf));
     }
 
-    pub fn update_input(&mut self, rl: &mut RaylibHandle) {
-        if rl.is_key_released(KeyboardKey::KEY_BACKSPACE) {
-            self.backspace_pressed = None;
+    fn apply_input(&mut self, rl: &mut RaylibHandle, input: KeyOrChar, is_ctrl_down: bool, is_shift_down: bool, _is_alt_down: bool) -> bool {
+        match input {
+            KeyOrChar::Char(ch) => {
+                if is_ctrl_down && ch == 'v' {
+                    if let Ok(clipboard) = rl.get_clipboard_text() {
+                        self.insert_over_selection(&clipboard);
+                        return true;
+                    }
+                } else {
+                    self.insert_char_over_selection(ch);
+                    return true;
+                }
+            }
+
+            KeyOrChar::Key(key) => {
+                let erasure = (key == KeyboardKey::KEY_DELETE) as i8 - (key == KeyboardKey::KEY_BACKSPACE) as i8;
+                if erasure != 0 {
+                    if self.selection_range().len() == 0 {
+                        let size = is_ctrl_down.then(||
+                            if erasure > 0 {
+                                self.current.next_word()
+                            } else {
+                                self.current.prev_word()
+                            }.chars().count()
+                        ).unwrap_or(1);
+
+                        let (min, max) = self.minmax_selection_mut();
+                        if erasure > 0 {
+                            *max = max.saturating_add(size);
+                        } else /* erasure < 0 */ {
+                            *min = min.saturating_sub(size);
+                        }
+                    }
+                    self.insert_over_selection("");
+                }
+
+                let y_movement = (key == KeyboardKey::KEY_UP) as i8 - (key == KeyboardKey::KEY_DOWN) as i8;
+                if y_movement != 0 {
+                    self.history_offset = if y_movement > 0 {
+                        if self.history_offset + 1 < self.history.len() + 1 { self.history_offset + 1 } else { 0 }
+                    } else /* y_movement < 0 */ {
+                        self.history_offset.checked_sub(1).unwrap_or(self.history.len() + 1 - 1)
+                    };
+
+                    Self::insert_over_selection_internal(
+                        &mut self.current,
+                        &mut self.selection_head,
+                        &mut self.selection_tail,
+                        &mut self.is_dirty,
+                        self.history.get(self.history_offset)
+                            .map(String::as_str)
+                            .unwrap_or_default(),
+                    );
+
+                    return true;
+                }
+
+                let x_movement = (key == KeyboardKey::KEY_RIGHT) as i8 - (key == KeyboardKey::KEY_LEFT) as i8;
+                if x_movement != 0 {
+                    let size = is_ctrl_down.then(||
+                        if x_movement > 0 {
+                            self.current.next_word()
+                        } else {
+                            self.current.prev_word()
+                        }.chars().count()
+                    ).unwrap_or(1);
+
+                    self.selection_tail = if x_movement > 0 {
+                        self.selection_tail.saturating_add(size)
+                    } else {
+                        self.selection_tail.saturating_sub(size)
+                    };
+
+                    if !is_shift_down {
+                        self.selection_head = self.selection_tail;
+                    }
+
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn update_input(&mut self, rl: &mut RaylibHandle) -> bool {
+        if let Some((rep_input, _)) = &self.last_keypress {
+            if rep_input.to_key().is_none_or(|k| rl.is_key_released(k)) {
+                self.last_keypress = None;
+            }
         }
 
         if self.is_focused {
             let is_ctrl_down = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
-            if let Some(ch) = rl.get_char_pressed() {
-                self.insert_char_over_selection(ch);
-            } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
-                self.backspace_pressed = Some(Instant::now());
-                let selection_len = self.selection_range().len();
-                let pop_len = if selection_len > 0 {
-                    selection_len
-                } else if is_ctrl_down {
-                    self.current.prev_word().chars().count()
-                } else { 1 };
-                let (min, _) = self.minmax_selection_mut();
-                *min = min.saturating_sub(pop_len);
-                self.insert_over_selection("");
-            } else if let Some(pressed_time) = &mut self.backspace_pressed {
+            let is_shift_down = rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) || rl.is_key_down(KeyboardKey::KEY_RIGHT_SHIFT);
+            let is_alt_down = rl.is_key_down(KeyboardKey::KEY_LEFT_ALT) || rl.is_key_down(KeyboardKey::KEY_RIGHT_ALT);
+
+            let input = rl.get_char_pressed().map_or_else(
+                || rl.get_key_pressed().map(|k| KeyOrChar::Key(k)),
+                |c| Some(KeyOrChar::Char(c)),
+            );
+
+            if let Some(input) = input {
+                self.last_keypress = Some((input, Instant::now()));
+                return self.apply_input(rl, input, is_ctrl_down, is_shift_down, is_alt_down);
+            } else if let Some((rep_input, ref mut pressed_time)) = self.last_keypress {
                 const DELAY: Duration = Duration::from_millis(550);
                 const REP: Duration = Duration::from_millis(33);
                 if pressed_time.elapsed() >= DELAY {
                     *pressed_time = Instant::now() - DELAY + REP;
-                    let pop_len = if is_ctrl_down {
-                        self.current.prev_word().chars().count()
-                    } else { 1 };
-                    let (min, _) = self.minmax_selection_mut();
-                    *min = min.saturating_sub(pop_len);
-                    self.insert_over_selection("");
-                }
-            } else if rl.is_key_pressed(KeyboardKey::KEY_UP) || rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
-                self.history_offset = if rl.is_key_pressed(KeyboardKey::KEY_UP) {
-                    if self.history_offset + 1 < self.history.len() + 1 { self.history_offset + 1 } else { 0 }
-                } else /* KEY_DOWN */ {
-                    self.history_offset.checked_sub(1).unwrap_or(self.history.len() + 1 - 1)
-                };
-                Self::insert_over_selection_internal(
-                    &mut self.current,
-                    &mut self.selection_head,
-                    &mut self.selection_tail,
-                    &mut self.is_dirty,
-                    self.history.get(self.history_offset)
-                        .map(String::as_str)
-                        .unwrap_or_default(),
-                );
-            } else if is_ctrl_down && rl.is_key_pressed(KeyboardKey::KEY_V) {
-                if let Ok(clipboard) = rl.get_clipboard_text() {
-                    self.insert_over_selection(&clipboard);
+                    return self.apply_input(rl, rep_input, is_ctrl_down, is_shift_down, is_alt_down);
                 }
             }
         }
+        false
     }
 
     pub fn submit_cmd(&mut self) -> Option<&str> {
@@ -416,7 +483,7 @@ impl ConsoleOut {
     }
 }
 
-pub trait WordLen {
+pub trait Words {
     type Word;
     fn prev_word(self) -> Self::Word;
     fn next_word(self) -> Self::Word;
@@ -433,7 +500,7 @@ fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
-impl WordLen for &str {
+impl Words for &str {
     type Word = Self;
 
     fn prev_word(self) -> Self::Word {

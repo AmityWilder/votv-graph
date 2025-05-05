@@ -223,15 +223,11 @@ fn main() {
             }
         }
 
-        let (c_in_focused, c_in_dirty) = {
-            cin().update_input(&mut rl);
-            let c_in = cin();
-            (c_in.is_focused(), c_in.is_dirty())
-        };
+        let is_input_changed = cin().update_input(&mut rl);
 
-        if c_in_focused {
+        if cin().is_focused() {
             const BLINK_TIME: Duration = Duration::from_millis(500);
-            if c_in_dirty {
+            if is_input_changed {
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now() - BLINK_TIME / 2;
             } else if cursor_last_toggled.elapsed() >= BLINK_TIME {
@@ -520,16 +516,22 @@ fn main() {
                     point += Vector2::new(cols as f32, rows as f32)*char_step;
                 }
 
-                if display_cursor {
+                {
                     const PREFIX_LEN: usize = ConsoleLineCategory::Command.color_prefix().1.len();
                     let row = console_buf.lines().count().saturating_sub(1);
-                    let rec = Rectangle::new(
+                    let mut selection_rec = Rectangle::new(
                         SAFE_ZONE + (PREFIX_LEN + selection_range.start) as f32*char_step.x,
                         SAFE_ZONE + row as f32*font_size,
-                        (selection_range.len() as f32*char_step.x - spacing).max(1.0),
+                        (selection_range.len() as f32*char_step.x - spacing).max(0.0),
                         font_size,
                     );
-                    d.draw_rectangle_rec(rec, Color::LIGHTBLUE);
+                    if selection_range.len() > 0 {
+                        d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.25));
+                    }
+                    selection_rec.width = 2.0;
+                    if display_cursor {
+                        d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE);
+                    }
                 }
             }
         }
