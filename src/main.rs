@@ -530,12 +530,12 @@ fn main() {
                     }
                     if display_cursor {
                         let cursor_rec = Rectangle::new(
-                            SAFE_ZONE + (PREFIX_LEN + selection_tail) as f32*char_step.x,
-                            selection_y,
+                            (SAFE_ZONE + (PREFIX_LEN + selection_tail) as f32*char_step.x).floor(),
+                            selection_y + font_size - 2.0,
+                            char_width + 2.0*spacing,
                             2.0,
-                            font_size,
                         );
-                        d.draw_rectangle_rec(cursor_rec, Color::LIGHTBLUE.alpha(0.75));
+                        d.draw_rectangle_rec(cursor_rec, Color::LIGHTBLUE);
                     }
                 }
             }

@@ -2,6 +2,8 @@ use std::{collections::VecDeque, ops::Range, time::{Duration, Instant}};
 use raylib::prelude::*;
 use crate::console_log;
 
+use KeyboardKey::*;
+
 pub mod words;
 use words::WordsEx;
 
@@ -108,6 +110,7 @@ impl ConsoleIn {
         *is_dirty = true;
     }
 
+    #[inline]
     pub fn insert_over_selection(&mut self, string: &str) {
         Self::insert_over_selection_internal(
             &mut self.current,
@@ -118,44 +121,60 @@ impl ConsoleIn {
         );
     }
 
+    #[inline]
     pub fn insert_char_over_selection(&mut self, ch: char) {
         let mut buf = [b'\0'; 4];
         self.insert_over_selection(ch.encode_utf8(&mut buf));
     }
 
-    fn advance_len(&self, by_word: bool, direction: i8) -> usize {
-        by_word.then_some(())
-            .and_then(|()| {
-                let mid = self.selection_tail;
-                if direction > 0 {
-                    self.current[mid..].words().next()
-                } else {
-                    self.current[..mid].words().next_back()
-                }
-            })
-            .map_or(1, |s| s.chars().count())
-    }
-
     fn apply_input(&mut self, rl: &mut RaylibHandle, input: KeyOrChar, is_ctrl_down: bool, is_shift_down: bool, _is_alt_down: bool) -> bool {
         match input {
             KeyOrChar::Char(ch) => {
-                if is_ctrl_down && ch == 'v' {
-                    if let Ok(clipboard) = rl.get_clipboard_text() {
-                        self.insert_over_selection(&clipboard);
-                        return true;
-                    }
-                } else {
-                    self.insert_char_over_selection(ch);
-                    return true;
-                }
+                self.insert_char_over_selection(ch);
+                return true;
             }
 
             KeyOrChar::Key(key) => {
+                if is_ctrl_down {
+                    match key {
+                        KEY_C | KEY_X => if self.selection_head != self.selection_tail {
+                            if rl.set_clipboard_text(&self.current[self.selection_range()]).is_ok() {
+                                if key == KEY_X {
+                                    self.insert_over_selection("");
+                                }
+                                return true;
+                            }
+                        }
 
-                let erasure = (key == KeyboardKey::KEY_DELETE) as i8 - (key == KeyboardKey::KEY_BACKSPACE) as i8;
+                        KEY_V => if let Ok(clipboard) = rl.get_clipboard_text() {
+                            self.insert_over_selection(&clipboard);
+                            return true;
+                        }
+
+                        KEY_A => {
+                            self.selection_head = 0;
+                            self.selection_tail = self.current.len();
+                            return true;
+                        }
+
+                        _ => {}
+                    }
+                }
+
+                let erasure = (key == KEY_DELETE) as i8 - (key == KEY_BACKSPACE) as i8;
                 if erasure != 0 {
                     if self.selection_range().len() == 0 {
-                        let size = self.advance_len(is_ctrl_down, erasure);
+                        let size = is_ctrl_down.then_some(())
+                            .and_then(|()| {
+                                let mid = self.selection_tail;
+                                if erasure > 0 {
+                                    self.current[mid..].words().next()
+                                } else {
+                                    self.current[..mid].words().next_back()
+                                }
+                            })
+                            .map_or(1, |s| s.chars().count());
+
                         let total_len = self.current.len();
                         let (min, max) = self.minmax_selection_mut();
                         if erasure > 0 {
@@ -165,9 +184,11 @@ impl ConsoleIn {
                         }
                     }
                     self.insert_over_selection("");
+
+                    return true;
                 }
 
-                let y_movement = (key == KeyboardKey::KEY_UP) as i8 - (key == KeyboardKey::KEY_DOWN) as i8;
+                let y_movement = (key == KEY_UP) as i8 - (key == KEY_DOWN) as i8;
                 if y_movement != 0 {
                     self.history_offset = if y_movement > 0 {
                         if self.history_offset + 1 < self.history.len() + 1 { self.history_offset + 1 } else { 0 }
@@ -188,15 +209,39 @@ impl ConsoleIn {
                     return true;
                 }
 
-                let x_movement = (key == KeyboardKey::KEY_RIGHT) as i8 - (key == KeyboardKey::KEY_LEFT) as i8;
-                if x_movement != 0 {
-                    let size = self.advance_len(is_ctrl_down, x_movement);
+                if matches!(key, KEY_RIGHT|KEY_LEFT | KEY_HOME|KEY_END) {
+                    self.selection_tail = match key {
+                        KEY_RIGHT | KEY_LEFT => {
+                            let x_movement = (key == KEY_RIGHT) as i8 - (key == KEY_LEFT) as i8;
+                            let size = is_ctrl_down.then_some(())
+                                .and_then(|()| {
+                                    let mid = self.selection_tail;
+                                    if x_movement > 0 {
+                                        self.current[mid..].words().next()
+                                    } else {
+                                        self.current[..mid].words().next_back()
+                                    }
+                                })
+                                .map_or(1, |s| s.chars().count());
 
-                    self.selection_tail = if x_movement > 0 {
-                        let total_len = self.current.len();
-                        self.selection_tail.saturating_add(size).min(total_len)
-                    } else {
-                        self.selection_tail.saturating_sub(size)
+                            let selection_range = self.selection_range();
+                            if !is_shift_down && !selection_range.is_empty() {
+                                if x_movement > 0 {
+                                    selection_range.end
+                                } else {
+                                    selection_range.start
+                                }
+                            } else {
+                                if x_movement > 0 {
+                                    self.selection_tail.saturating_add(size).min(self.current.len())
+                                } else {
+                                    self.selection_tail.saturating_sub(size)
+                                }
+                            }
+                        },
+                        KEY_HOME => 0,
+                        KEY_END => self.current.len(),
+                        _ => unreachable!(),
                     };
 
                     if !is_shift_down {
@@ -218,9 +263,9 @@ impl ConsoleIn {
         }
 
         if self.is_focused {
-            let is_ctrl_down = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
-            let is_shift_down = rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) || rl.is_key_down(KeyboardKey::KEY_RIGHT_SHIFT);
-            let is_alt_down = rl.is_key_down(KeyboardKey::KEY_LEFT_ALT) || rl.is_key_down(KeyboardKey::KEY_RIGHT_ALT);
+            let is_ctrl_down = rl.is_key_down(KEY_LEFT_CONTROL) || rl.is_key_down(KEY_RIGHT_CONTROL);
+            let is_shift_down = rl.is_key_down(KEY_LEFT_SHIFT) || rl.is_key_down(KEY_RIGHT_SHIFT);
+            let is_alt_down = rl.is_key_down(KEY_LEFT_ALT) || rl.is_key_down(KEY_RIGHT_ALT);
 
             let input = rl.get_char_pressed().map_or_else(
                 || rl.get_key_pressed().map(|k| KeyOrChar::Key(k)),
@@ -248,6 +293,8 @@ impl ConsoleIn {
             self.history.push_front(msg.clone());
             self.history_offset = self.history.len();
             console_log!(Ghost, "{msg}");
+            self.selection_head = 0;
+            self.selection_tail = 0;
             self.history.front()
                 .map(String::as_str)
                 .expect("should have at least one element after push")
