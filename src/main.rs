@@ -3,6 +3,7 @@
 
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
+use console::ConsoleLineCategory;
 use console::{cin, console_log, cout, enrich::EnrichEx, Tempo};
 use command::Cmd;
 use graph::WeightedGraph;
@@ -104,6 +105,8 @@ fn main() {
 
     mouse_tracking = rl.get_mouse_position();
 
+    let mut console_buf = String::with_capacity(4 * 1024);
+
     'window: while !rl.window_should_close() {
         if rl.is_window_resized() {
             let width = u32::try_from(rl.get_render_width()).unwrap()*UPSCALE as u32;
@@ -169,7 +172,8 @@ fn main() {
                                 }
                                 Cmd::SvRouteClear => {
                                     route = None;
-                                    Ok(console_log!(Info, "route cleared"))
+                                    console_log!(Info, "route cleared");
+                                    Ok(())
                                 },
                                 Cmd::SvNew => Cmd::run_sv_new(&mut graph, &mut route, camera, args),
                                 Cmd::SvEdge => Cmd::run_sv_edge(&mut graph, &mut route, args),
@@ -178,9 +182,14 @@ fn main() {
                                 Cmd::Tempo => Cmd::run_tempo(args, &mut tempo),
                                 Cmd::Dbg => {
                                     is_debugging = !is_debugging;
-                                    Ok(console_log!(Info, "debugging is now {}", if is_debugging { "on" } else { "off" }))
+                                    console_log!(Info, "debugging is now {}", if is_debugging { "on" } else { "off" });
+                                    Ok(())
                                 }
                                 Cmd::Focus => Cmd::run_focus(&graph, &mut camera, args),
+                                Cmd::Cls => {
+                                    cout().clear_log();
+                                    Ok(())
+                                }
                                 Cmd::Close => break 'window,
                             };
                             if let Err(e) = result {
@@ -419,23 +428,79 @@ fn main() {
                 let font_size = font.baseSize as f32;
                 let spacing = 0.0;
                 let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
-                let max_lines = ((d.get_render_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
+                let max_history_lines = ((d.get_render_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
 
                 let (c_out, c_in) = (cout(), cin());
 
-                for (v, text, color) in c_out.sample(
-                    &c_in,
-                    is_debugging,
-                    c_in.is_focused() && is_cursor_shown,
-                    max_lines,
-                ).enrich(
-                    Vector2::new(SAFE_ZONE, SAFE_ZONE),
-                    font_size,
-                    char_width,
-                    spacing,
-                    Color::WHITE,
-                ) {
-                    d.draw_text_ex(&font, text, v, font_size, spacing, color);
+                {
+                    let (Color { r, g, b, a }, pre) = ConsoleLineCategory::Command.color_prefix();
+                    let cmd_string = format!("<color=rgba({r},{g},{b},{a})>{pre}{}{}</color>", &c_in.current, if c_in.is_focused() && is_cursor_shown { "_" } else { "" });
+
+                    let history = c_out.log_history()
+                        .flat_map(|msg| msg
+                            .lines()
+                            .enumerate()
+                        )
+                        .chain(is_debugging
+                            .then(|| c_out.dbg_history()
+                                .flat_map(|msg| msg
+                                    .lines()
+                                    .enumerate()
+                                )
+                            )
+                            .into_iter()
+                            .flatten()
+                        );
+
+                    let mut skip = history
+                        .clone()
+                        .count()
+                        .saturating_sub(max_history_lines);
+
+                    skip -= history.clone()
+                        .map(|(n, _)| n)
+                        .nth(skip)
+                        .unwrap_or_default();
+
+                    let history = history
+                        .map(|(_, s)| s)
+                        .skip(skip);
+
+                    let it = history.chain(std::iter::once(cmd_string.as_str()));
+
+                    console_buf.clear();
+                    console_buf.reserve(it.clone().map(|s| s.len() + 1).sum::<usize>());
+                    for s in it {
+                        console_buf.push_str(s);
+                        console_buf.push('\n');
+                    }
+                }
+
+                let (init, sample) = console_buf.split_at(
+                    console_buf.match_indices('\n')
+                        .map(|(n, _)| n)
+                        .nth_back(max_history_lines)
+                        .unwrap_or_default()
+                );
+
+                let mut point = Vector2::new(SAFE_ZONE, SAFE_ZONE);
+                let char_step = Vector2::new(char_width + spacing, font_size);
+                for (text, color) in sample.enrich(Color::WHITE, init) {
+                    d.draw_text_ex(&font, text, point, font_size, spacing, color);
+
+                    let (rows, last_line) = text
+                        .rsplit_once('\n')
+                        .map_or(
+                            (0, text),
+                            |(prior_lines, last_line)| (
+                                prior_lines.lines().count().max(1),
+                                last_line,
+                            ),
+                        );
+                    let cols = last_line.chars().count();
+
+                    if rows > 0 { point.x = SAFE_ZONE; }
+                    point += Vector2::new(cols as f32, rows as f32)*char_step;
                 }
             }
         }

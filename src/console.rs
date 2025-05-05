@@ -124,7 +124,7 @@ pub enum ConsoleLineCategory {
 }
 
 impl ConsoleLineCategory {
-    const fn color_prefix(self) -> (Color, &'static str) {
+    pub const fn color_prefix(self) -> (Color, &'static str) {
         let (mut c, pre) = match self {
             Self::Route   => (Color::RAYWHITE,  "route: "  ),
             Self::Ghost | Self::Command => (Color::LIGHTBLUE, ">"),
@@ -274,26 +274,29 @@ impl ConsoleIn {
 }
 
 pub struct ConsoleOut {
-    log: String,
+    log: VecDeque<String>,
     dbg: Vec<String>,
 }
 
 impl ConsoleOut {
     pub const fn new() -> Self {
         Self {
-            log: String::new(),
+            log: VecDeque::new(),
             dbg: Vec::new(),
         }
     }
 
-    pub fn log(&mut self, cat: ConsoleLineCategory, msg: std::fmt::Arguments<'_>) {
-        use std::fmt::Write;
-        let (Color { r, g, b, a }, pre) = cat.color_prefix();
-        _ = writeln!(self.log, "<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>");
+    #[inline]
+    pub fn clear_log(&mut self) {
+        self.log.clear();
     }
 
-    fn _log_lines(&self) -> std::str::Lines<'_> {
-        self.log.lines()
+    pub fn log(&mut self, cat: ConsoleLineCategory, msg: std::fmt::Arguments<'_>) {
+        let (Color { r, g, b, a }, pre) = cat.color_prefix();
+        if self.log.len() == 512 {
+            _ = self.log.pop_front();
+        }
+        self.log.push_back(format!("<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>"));
     }
 
     pub fn dbg(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
@@ -311,46 +314,21 @@ impl ConsoleOut {
         self.dbg.push(format!("<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>"));
     }
 
-    fn dbg_lines(&self) -> impl DoubleEndedIterator<Item = &'_ str> + Clone {
-        self.dbg.iter()
-            .map(String::as_str)
-            .flat_map(str::lines)
+    #[inline]
+    pub fn log_history(&self) -> impl DoubleEndedIterator<Item = &'_ str> + ExactSizeIterator + Clone {
+        self.log.iter().map(String::as_str)
     }
 
-    pub fn sample(
-        &self,
-        c_in: &ConsoleIn,
-        is_debugging: bool,
-        show_cursor: bool,
-        mut max_history_lines: usize,
-    ) -> String {
-        let (Color { r, g, b, a }, pre) = ConsoleLineCategory::Command.color_prefix();
-        let cmd_string = format!("<color=rgba({r},{g},{b},{a})>{pre}{}{}</color>", &c_in.current, if show_cursor { "_" } else { "" });
-        let command = std::iter::once(cmd_string.as_str());
-
-        let log_lines = self.log.lines().count();
-        let log_skipped = log_lines.saturating_sub(max_history_lines);
-        max_history_lines = max_history_lines.saturating_sub(log_skipped);
-
-        let log = self.log.lines()
-            .skip(log_skipped);
-
-        let dbg_lines = self.dbg_lines().count();
-        let debug_skipped = dbg_lines.saturating_sub(if is_debugging { max_history_lines } else { 0 });
-
-        let debug = self.dbg_lines()
-            .skip(debug_skipped);
-
-        log.chain(debug).chain(command)
-            .collect::<Vec<&str>>()
-            .join("\n")
+    #[inline]
+    pub fn dbg_history(&self) -> impl DoubleEndedIterator<Item = &'_ str> + ExactSizeIterator + Clone {
+        self.dbg.iter().map(String::as_str)
     }
 }
 
 pub fn pop_word(s: &mut String) {
     let st = s.trim_end();
-    if let Some(last_char) = st.chars().last() {
-        let new_len = if last_char.is_alphanumeric() || last_char == '_' {
+    let new_len = if let Some(last_char) = st.chars().last() {
+        if last_char.is_alphanumeric() || last_char == '_' {
             st.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()
         } else if last_char == ']' {
             let trimmed = st.trim_end_matches(']');
@@ -366,10 +344,7 @@ pub fn pop_word(s: &mut String) {
             if trimmed.ends_with('{') { len - 1 } else { len }
         } else {
             st.trim_end_matches(last_char).len()
-        };
-
-        while s.len() > new_len {
-            s.pop();
         }
-    }
+    } else { 0 };
+    s.truncate(new_len);
 }

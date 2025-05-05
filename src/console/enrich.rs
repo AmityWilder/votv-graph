@@ -3,30 +3,28 @@ use raylib::prelude::*;
 #[derive(Clone)]
 pub struct Enrich<'a> {
     text: &'a str,
-    start_x: f32,
-    font_size: f32,
-    char_width: f32,
-    spacing: f32,
-    color: Vec<Color>,
-    point: Vector2,
+    root_color: Color,
+    color_stack: Vec<Color>,
 }
 impl<'a> Enrich<'a> {
     pub fn new(
         text: &'a str,
-        start: Vector2,
-        font_size: f32,
-        char_width: f32,
-        spacing: f32,
-        color: Color,
+        root_color: Color,
+        initial: &str,
     ) -> Self {
+        let color_stack = if !initial.is_empty() {
+            let mut init = Enrich::new(initial, root_color, "");
+            while let Some(_) = init.next() {
+                // ignore
+            }
+            init.color_stack
+        } else {
+            Vec::new()
+        };
         Self {
             text,
-            start_x: start.x,
-            font_size,
-            char_width,
-            spacing,
-            color: vec![color],
-            point: start,
+            root_color,
+            color_stack,
         }
     }
 }
@@ -34,76 +32,80 @@ impl<'a> Enrich<'a> {
 pub trait EnrichEx {
     fn enrich(
         &self,
-        start: Vector2,
-        font_size: f32,
-        char_width: f32,
-        spacing: f32,
-        color: Color,
+        root_color: Color,
+        initial: &str,
     ) -> Enrich<'_>;
 }
 impl EnrichEx for str {
     fn enrich(
         &self,
-        start: Vector2,
-        font_size: f32,
-        char_width: f32,
-        spacing: f32,
-        color: Color,
+        root_color: Color,
+        initial: &str,
     ) -> Enrich<'_> {
-        Enrich::new(self, start, font_size, char_width, spacing, color)
+        Enrich::new(self, root_color, initial)
     }
 }
 
 impl<'a> Iterator for Enrich<'a> {
-    type Item = (Vector2, &'a str, Color);
+    type Item = (&'a str, Color);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.text.is_empty() {
-            None
-        } else {
-            let segment_color = *self.color.last()
-                .expect("should always have at least one color");
+        while !self.text.is_empty() {
+            let segment_color = *self.color_stack.last().unwrap_or(&self.root_color);
 
-            let mut search = self.text;
             let result;
-            loop {
-                let idx = self.text.substr_range(search).unwrap().start;
-                if let Some(subsearch) = search.strip_prefix("<color").and_then(|s| s.trim_start_matches(' ').strip_prefix('=').map(|s| s.trim_start_matches(' '))) {
-                    if let Some((end, closer)) = subsearch.match_indices('>').next() {
-                        let color_str = subsearch[..end].trim_matches(' ');
-                        if let Ok(RichColor(color)) = color_str.parse() {
-                            self.color.push(color);
-                            result = &self.text[..idx];
-                            self.text = &self.text[self.text.substr_range(closer).unwrap().end..];
-                            break;
+            (result, self.text) = self.text
+                .match_indices('<')
+                .filter_map(|(i, _)| {
+                    let (pre, post) = self.text.split_at(i);
+                    post.find('>')
+                        .map(|pos| {
+                            let (mid, post) = post.split_at(pos + 1);
+                            (pre, mid, post)
+                        })
+                })
+                .find(|&(pre, ext, post)| {
+                    if ext == "</color>" {
+                        if cfg!(debug_assertions) && self.color_stack.is_empty() {
+                            println!("built-in messages should not contain excessive color stack pops\n  pre: {pre:?}\n  post: {post:?}");
                         }
+                        _ = self.color_stack.pop();
+                        true
+                    } else if let Some(color) = ext
+                        .strip_prefix("<color")
+                        .and_then(|s| s
+                            .trim_start_matches(' ')
+                            .strip_prefix('=')
+                        )
+                        .map(|s| s
+                            .strip_suffix('>').expect("should be guarded by filter_map")
+                            .trim_matches(' ')
+                        )
+                        .and_then(|color_str| color_str
+                            .parse()
+                            .map(|RichColor(color)| color)
+                            .ok()
+                        )
+                    {
+                        self.color_stack.push(color);
+                        true
+                    } else {
+                        // if cfg!(debug_assertions) && ext.starts_with("<color") {
+                        //     println!("possibly broken ext: {ext:?}\npre: {pre:?} post: {post:?}");
+                        // }
+                        false
                     }
-                } else if let Some(rest) = search.strip_prefix("</color>") {
-                    if self.color.len() > 1 {
-                        self.color.pop();
-                    }
-                    result = &self.text[..idx];
-                    self.text = rest;
-                    break;
-                }
+                })
+                .map_or(
+                    (self.text, ""),
+                    |(pre, _, post)| (pre, post),
+                );
 
-                search = &search[1..];
-                if search.is_empty() {
-                    result = self.text;
-                    self.text = "";
-                    break;
-                }
+            if !result.is_empty() {
+                return Some((result, segment_color));
             }
-
-            let point = self.point;
-
-            let (last_line_idx, last_line) = result.split('\n').enumerate().last().unwrap_or_default();
-            let indent = if last_line_idx > 0 { self.start_x } else { self.point.x };
-            self.point.x = indent + last_line.len() as f32*(self.char_width + self.spacing);
-            self.point.y += last_line_idx as f32*self.font_size;
-
-            return Some((point, result, segment_color))
         }
+        None
     }
 }
 

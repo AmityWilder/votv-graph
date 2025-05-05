@@ -166,6 +166,10 @@ define_commands!{
             case(args(),                         desc = "Print the current tempo"),
         )]
         Tempo,
+
+        #[input("cls")]
+        #[usage(case(args(), desc = "Clear the console"))]
+        Cls,
     }
 }
 
