@@ -10,11 +10,7 @@ pub struct Version {
 }
 impl Version {
     pub const fn new(major: u8, minor: u8, patch: u16) -> Self {
-        Self {
-            major,
-            minor,
-            patch,
-        }
+        Self { major, minor, patch }
     }
 }
 impl std::fmt::Display for Version {
@@ -164,8 +160,8 @@ impl std::fmt::Display for LoadGraphError {
             ParseFloat(_) => "expected a float",
             UsizeToVertexID(_) => unimplemented!(),
         };
-        let mut snippet = format!("<color: #288cfa>{:>4} |</color>    <color: #c8c8c8>{}</color>\
-                                  \n     <color: #288cfa>|</color>    {:<space$}{:^<squig$} {line_msg}",
+        let mut snippet = format!("<color = #288cfa>{:>4} |</color>    <color = #c8c8c8>{}</color>\
+                                  \n     <color = #288cfa>|</color>    {:<space$}{:^<squig$} {line_msg}",
             self.src.line + 1,
             self.src.code,
             "",
@@ -175,9 +171,9 @@ impl std::fmt::Display for LoadGraphError {
         );
         if let DuplicateName(prev) = &self.kind {
             let line_msg = "first ocurrance here";
-            snippet = format!("<color: #288cfa>{:>4} |</color>    <color: #c8c8c8>{}</color>\
-                              \n     <color: #288cfa>|</color>    {:<space$}<color: #288cfa>{:-<squig$} {line_msg}</color>\
-                              \n    <color: #288cfa>...</color>\
+            snippet = format!("<color = #288cfa>{:>4} |</color>    <color = #c8c8c8>{}</color>\
+                              \n     <color = #288cfa>|</color>    {:<space$}<color = #288cfa>{:-<squig$} {line_msg}</color>\
+                              \n    <color = #288cfa>...</color>\
                               \n{snippet}",
                 prev.line + 1,
                 prev.code,

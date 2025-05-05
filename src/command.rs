@@ -105,6 +105,10 @@ define_commands!{
         #[usage(case(args(), desc = "Close the application"))]
         Close,
 
+        #[input("cls")]
+        #[usage(case(args(), desc = "Clear the console"))]
+        Cls,
+
         #[input("dbg")]
         #[usage(case(args(), desc = "Toggle debug messages"))]
         Dbg,
@@ -166,10 +170,6 @@ define_commands!{
             case(args(),                         desc = "Print the current tempo"),
         )]
         Tempo,
-
-        #[input("cls")]
-        #[usage(case(args(), desc = "Clear the console"))]
-        Cls,
     }
 }
 
@@ -233,6 +233,15 @@ impl From<std::io::Error> for CmdError {
 pub type CmdResult<T> = Result<T, CmdError>;
 
 impl Cmd {
+    pub fn parse(s: &str) -> Option<Result<(Cmd, std::str::Split<'_, char>), FromCmdError>> {
+        let mut args = s.split(' ');
+        args.next()
+            .map(|first|
+                Cmd::try_from_str(first)
+                    .map(|cmd| (cmd, args))
+            )
+    }
+
     pub fn run_focus(
         graph: &WeightedGraph,
         camera: &mut Camera3D,
@@ -308,7 +317,7 @@ impl Cmd {
                 console_log!(Info, "click each target with the mouse; order doesn't matter except that the first will be the start");
                 console_log!(Info, "click a target again to un-target it");
                 console_log!(Info, "run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished");
-                cin().current.push_str("sv.route");
+                cin().insert_over_selection("sv.route");
                 return Ok(false);
             }
             Some(_) => {
@@ -342,7 +351,7 @@ impl Cmd {
                 console_log!(Info, "click each target with the mouse; order doesn't matter");
                 console_log!(Info, "click a target again to un-target it");
                 console_log!(Info, "run the command `<color = #0096e6>sv.route.add</color>` (without arguments) when finished");
-                cin().current.push_str("sv.route.add");
+                cin().insert_over_selection("sv.route.add");
                 return Ok(false);
             }
             Some(_) => {

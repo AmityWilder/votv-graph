@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-#![feature(substr_range, str_split_remainder, assert_matches, iter_next_chunk)]
+#![feature(
+    substr_range,           // used in serialization::Source
+    str_split_remainder,
+    assert_matches,
+    iter_next_chunk,
+)]
 
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
@@ -86,11 +91,12 @@ fn main() {
         .title("VotV Route Tool")
         .resizable()
         .msaa_4x()
+        .vsync()
         .build();
 
     rl.hide_cursor();
     rl.maximize_window();
-    rl.set_target_fps(120);
+    rl.set_target_fps(60);
     rl.set_exit_key(None);
 
     let font = rl.load_font_from_memory(&thread, ".ttf", include_bytes!("resources/ShareTechMono-Regular.ttf"), 16, None).unwrap();
@@ -138,8 +144,8 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
             if cin().is_focused() {
                 // finish giving command
-                let mut c_in = cin();
-                if let Some(cmd_args) = c_in.submit_cmd() {
+                let cmd_line = cin().submit_cmd().map(|s| s.to_owned());
+                if let Some(cmd_args) = cmd_line.as_ref().map(String::as_str).and_then(Cmd::parse) {
                     match cmd_args {
                         Ok((cmd, args)) => {
                             let result = match cmd {
@@ -214,15 +220,18 @@ fn main() {
                 cin().focus();
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
-                // console.command.clear();
             }
         }
 
-        let is_console_changed = cin().update_input(&mut rl);
+        let (c_in_focused, c_in_dirty) = {
+            cin().update_input(&mut rl);
+            let c_in = cin();
+            (c_in.is_focused(), c_in.is_dirty())
+        };
 
-        if cin().is_focused() {
+        if c_in_focused {
             const BLINK_TIME: Duration = Duration::from_millis(500);
-            if is_console_changed {
+            if c_in_dirty {
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now() - BLINK_TIME / 2;
             } else if cursor_last_toggled.elapsed() >= BLINK_TIME {
@@ -230,14 +239,14 @@ fn main() {
                 cursor_last_toggled = Instant::now();
             }
         } else {
-            let speed = 4.0*camera.position.distance_to(camera.target)/CAMERA_POSITION_DEFAULT.y;
-            let north = (rl.is_key_down(KeyboardKey::KEY_W) as i8 - rl.is_key_down(KeyboardKey::KEY_S) as i8) as f32*speed;
-            let east  = (rl.is_key_down(KeyboardKey::KEY_D) as i8 - rl.is_key_down(KeyboardKey::KEY_A) as i8) as f32*speed;
-            let up    = (rl.is_key_down(KeyboardKey::KEY_Q) as i8 - rl.is_key_down(KeyboardKey::KEY_E) as i8) as f32*speed;
-            let pitch = (rl.is_key_down(KeyboardKey::KEY_R) as i8 - rl.is_key_down(KeyboardKey::KEY_F) as i8) as f32*speed;
-            let yaw   = (rl.is_key_down(KeyboardKey::KEY_X) as i8 - rl.is_key_down(KeyboardKey::KEY_Z) as i8) as f32*speed;
-            let pan = Vector3::new(east, 0.0, -north);
-            let zoom = Vector3::new(yaw, up, -pitch);
+            let speed = 6.0*camera.position.distance_to(camera.target)/CAMERA_POSITION_DEFAULT.y;
+            let north = (rl.is_key_down(KeyboardKey::KEY_W) as i8 - rl.is_key_down(KeyboardKey::KEY_S) as i8) as f32;
+            let east  = (rl.is_key_down(KeyboardKey::KEY_D) as i8 - rl.is_key_down(KeyboardKey::KEY_A) as i8) as f32;
+            let up    = (rl.is_key_down(KeyboardKey::KEY_Q) as i8 - rl.is_key_down(KeyboardKey::KEY_E) as i8) as f32;
+            let pitch = (rl.is_key_down(KeyboardKey::KEY_R) as i8 - rl.is_key_down(KeyboardKey::KEY_F) as i8) as f32;
+            let yaw   = (rl.is_key_down(KeyboardKey::KEY_X) as i8 - rl.is_key_down(KeyboardKey::KEY_Z) as i8) as f32;
+            let pan = Vector3::new(east, 0.0, -north) * speed;
+            let zoom = Vector3::new(yaw, up, -pitch) * speed;
             camera.position += pan + zoom;
             camera.target += pan;
         }
@@ -430,11 +439,14 @@ fn main() {
                 let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
                 let max_history_lines = ((d.get_render_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
 
-                let (c_out, c_in) = (cout(), cin());
+                let (mut c_out, mut c_in) = (cout(), cin());
 
-                {
+                let display_cursor = c_in.is_focused() && is_cursor_shown;
+                let selection_range = c_in.selection_range();
+
+                if c_out.is_dirty() || c_in.is_dirty() {
                     let (Color { r, g, b, a }, pre) = ConsoleLineCategory::Command.color_prefix();
-                    let cmd_string = format!("<color=rgba({r},{g},{b},{a})>{pre}{}{}</color>", &c_in.current, if c_in.is_focused() && is_cursor_shown { "_" } else { "" });
+                    let cmd_string = format!("<color=rgba({r},{g},{b},{a})>{pre}{}</color>", c_in.current());
 
                     let history = c_out.log_history()
                         .flat_map(|msg| msg
@@ -474,7 +486,12 @@ fn main() {
                         console_buf.push_str(s);
                         console_buf.push('\n');
                     }
+
+                    c_in.mark_clean();
+                    c_out.mark_clean();
                 }
+                drop(c_in);
+                drop(c_out);
 
                 let (init, sample) = console_buf.split_at(
                     console_buf.match_indices('\n')
@@ -501,6 +518,18 @@ fn main() {
 
                     if rows > 0 { point.x = SAFE_ZONE; }
                     point += Vector2::new(cols as f32, rows as f32)*char_step;
+                }
+
+                if display_cursor {
+                    const PREFIX_LEN: usize = ConsoleLineCategory::Command.color_prefix().1.len();
+                    let row = console_buf.lines().count().saturating_sub(1);
+                    let rec = Rectangle::new(
+                        SAFE_ZONE + (PREFIX_LEN + selection_range.start) as f32*char_step.x,
+                        SAFE_ZONE + row as f32*font_size,
+                        (selection_range.len() as f32*char_step.x - spacing).max(1.0),
+                        font_size,
+                    );
+                    d.draw_rectangle_rec(rec, Color::LIGHTBLUE);
                 }
             }
         }
