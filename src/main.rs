@@ -44,7 +44,7 @@ fn main() {
                 => {
                 // if cfg!(debug_assertions) {
                 //     console_log!(lv.try_into().unwrap(), "Raylib: {msg}");
-                // }
+                // }{}}{dsadas }
             }
 
             | TraceLogLevel::LOG_WARNING
@@ -437,7 +437,7 @@ fn main() {
                 let (mut c_out, mut c_in) = (cout(), cin());
 
                 let display_cursor = c_in.is_focused() && is_cursor_shown;
-                let selection_range = c_in.selection_range();
+                let (selection_range, selection_tail) = (c_in.selection_range(), c_in.selection_tail());
 
                 if c_out.is_dirty() || c_in.is_dirty() {
                     let (Color { r, g, b, a }, pre) = ConsoleLineCategory::Command.color_prefix();
@@ -518,18 +518,24 @@ fn main() {
                 {
                     const PREFIX_LEN: usize = ConsoleLineCategory::Command.color_prefix().1.len();
                     let row = console_buf.lines().count().saturating_sub(1);
-                    let mut selection_rec = Rectangle::new(
+                    let selection_y = SAFE_ZONE + row as f32*font_size;
+                    let selection_rec = Rectangle::new(
                         SAFE_ZONE + (PREFIX_LEN + selection_range.start) as f32*char_step.x,
-                        SAFE_ZONE + row as f32*font_size,
+                        selection_y,
                         (selection_range.len() as f32*char_step.x - spacing).max(0.0),
                         font_size,
                     );
                     if selection_range.len() > 0 {
                         d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.25));
                     }
-                    selection_rec.width = 2.0;
                     if display_cursor {
-                        d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.75));
+                        let cursor_rec = Rectangle::new(
+                            SAFE_ZONE + (PREFIX_LEN + selection_tail) as f32*char_step.x,
+                            selection_y,
+                            2.0,
+                            font_size,
+                        );
+                        d.draw_rectangle_rec(cursor_rec, Color::LIGHTBLUE.alpha(0.75));
                     }
                 }
             }

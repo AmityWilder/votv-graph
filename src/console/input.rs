@@ -1,7 +1,9 @@
 use std::{collections::VecDeque, ops::Range, time::{Duration, Instant}};
 use raylib::prelude::*;
-
 use crate::console_log;
+
+pub mod words;
+use words::WordsEx;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum KeyOrChar {
@@ -70,7 +72,7 @@ impl ConsoleIn {
     }
 
     #[inline]
-    pub const fn _selection_tail(&self) -> usize {
+    pub const fn selection_tail(&self) -> usize {
         self.selection_tail
     }
 
@@ -97,6 +99,7 @@ impl ConsoleIn {
 
     fn insert_over_selection_internal(current: &mut String, selection_head: &mut usize, selection_tail: &mut usize, is_dirty: &mut bool, string: &str) {
         let selection = range_from_pair(*selection_head, *selection_tail);
+        assert!(selection.start <= current.len() && selection.end <= current.len());
         if selection.is_empty() && string.is_empty() { return; }
         let new_cursor = selection.start + string.chars().count();
         current.replace_range(selection, string);
@@ -120,6 +123,19 @@ impl ConsoleIn {
         self.insert_over_selection(ch.encode_utf8(&mut buf));
     }
 
+    fn advance_len(&self, by_word: bool, direction: i8) -> usize {
+        by_word.then_some(())
+            .and_then(|()| {
+                let mid = self.selection_tail;
+                if direction > 0 {
+                    self.current[mid..].words().next()
+                } else {
+                    self.current[..mid].words().next_back()
+                }
+            })
+            .map_or(1, |s| s.chars().count())
+    }
+
     fn apply_input(&mut self, rl: &mut RaylibHandle, input: KeyOrChar, is_ctrl_down: bool, is_shift_down: bool, _is_alt_down: bool) -> bool {
         match input {
             KeyOrChar::Char(ch) => {
@@ -135,21 +151,16 @@ impl ConsoleIn {
             }
 
             KeyOrChar::Key(key) => {
+
                 let erasure = (key == KeyboardKey::KEY_DELETE) as i8 - (key == KeyboardKey::KEY_BACKSPACE) as i8;
                 if erasure != 0 {
                     if self.selection_range().len() == 0 {
-                        let size = is_ctrl_down.then(||
-                            if erasure > 0 {
-                                self.current.next_word()
-                            } else {
-                                self.current.prev_word()
-                            }.chars().count()
-                        ).unwrap_or(1);
-
+                        let size = self.advance_len(is_ctrl_down, erasure);
+                        let total_len = self.current.len();
                         let (min, max) = self.minmax_selection_mut();
                         if erasure > 0 {
-                            *max = max.saturating_add(size);
-                        } else /* erasure < 0 */ {
+                            *max = max.saturating_add(size).min(total_len);
+                        } else {
                             *min = min.saturating_sub(size);
                         }
                     }
@@ -160,7 +171,7 @@ impl ConsoleIn {
                 if y_movement != 0 {
                     self.history_offset = if y_movement > 0 {
                         if self.history_offset + 1 < self.history.len() + 1 { self.history_offset + 1 } else { 0 }
-                    } else /* y_movement < 0 */ {
+                    } else {
                         self.history_offset.checked_sub(1).unwrap_or(self.history.len() + 1 - 1)
                     };
 
@@ -179,16 +190,11 @@ impl ConsoleIn {
 
                 let x_movement = (key == KeyboardKey::KEY_RIGHT) as i8 - (key == KeyboardKey::KEY_LEFT) as i8;
                 if x_movement != 0 {
-                    let size = is_ctrl_down.then(||
-                        if x_movement > 0 {
-                            self.current.next_word()
-                        } else {
-                            self.current.prev_word()
-                        }.chars().count()
-                    ).unwrap_or(1);
+                    let size = self.advance_len(is_ctrl_down, x_movement);
 
                     self.selection_tail = if x_movement > 0 {
-                        self.selection_tail.saturating_add(size)
+                        let total_len = self.current.len();
+                        self.selection_tail.saturating_add(size).min(total_len)
                     } else {
                         self.selection_tail.saturating_sub(size)
                     };
@@ -246,67 +252,6 @@ impl ConsoleIn {
                 .map(String::as_str)
                 .expect("should have at least one element after push")
         })
-    }
-}
-
-pub trait Words {
-    type Word;
-    fn prev_word(self) -> Self::Word;
-    fn next_word(self) -> Self::Word;
-}
-
-const BRACKET_PAIRS: [(char, char); 4] = [
-    ('[', ']'),
-    ('(', ')'),
-    ('{', '}'),
-    ('<', '>'),
-];
-
-fn is_word_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
-
-impl Words for &str {
-    type Word = Self;
-
-    fn prev_word(self) -> Self::Word {
-        let st = self.trim_end();
-        if let Some(next_char) = st.chars().next() {
-            let trimmed_len = if is_word_char(next_char) {
-                st.trim_end_matches(is_word_char).len()
-            } else {
-                let trimmed = st.trim_end_matches(next_char);
-                BRACKET_PAIRS.iter()
-                    .copied()
-                    .find(|&(a, _)| a == next_char)
-                    .and_then(|(_, b)| trimmed.strip_suffix(b))
-                    .unwrap_or(trimmed)
-                    .len()
-            };
-            &self[trimmed_len..]
-        } else {
-            self
-        }
-    }
-
-    fn next_word(self) -> Self::Word {
-        let st = self.trim_start();
-        if let Some(next_char) = st.chars().next() {
-            let trimmed_len = if is_word_char(next_char) {
-                st.trim_start_matches(is_word_char).len()
-            } else {
-                let trimmed = st.trim_start_matches(next_char);
-                BRACKET_PAIRS.iter()
-                    .copied()
-                    .find(|&(a, _)| a == next_char)
-                    .and_then(|(_, b)| trimmed.strip_prefix(b))
-                    .unwrap_or(trimmed)
-                    .len()
-            };
-            &self[..self.len() - trimmed_len]
-        } else {
-            self
-        }
     }
 }
 
