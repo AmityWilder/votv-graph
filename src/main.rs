@@ -8,9 +8,8 @@
 
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
-use console::ConsoleLineCategory;
-use console::{cin, console_log, cout, enrich::EnrichEx, Tempo};
-use command::Cmd;
+use console::{cin, console_log, cout, enrich::EnrichEx, output::ConsoleLineCategory};
+use command::{Cmd, Tempo};
 use graph::WeightedGraph;
 use raylib::prelude::*;
 use route::{VertexClass, Visit};
@@ -530,7 +529,7 @@ fn main() {
                     }
                     selection_rec.width = 2.0;
                     if display_cursor {
-                        d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE);
+                        d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.75));
                     }
                 }
             }
