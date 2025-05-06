@@ -101,8 +101,8 @@ fn main() {
     let font = rl.load_font_from_memory(&thread, ".ttf", include_bytes!("resources/ShareTechMono-Regular.ttf"), 16, None).unwrap();
     let mut framebuffer = rl.load_render_texture(
         &thread,
-        rl.get_render_width().try_into().unwrap(),
-        rl.get_render_height().try_into().unwrap(),
+        rl.get_screen_width().try_into().unwrap(),
+        rl.get_screen_height().try_into().unwrap(),
     ).unwrap();
     let mut shader = rl.load_shader_from_memory(&thread, None, Some(include_str!("resources/screen.frag")));
     let shader_render_width_loc = shader.get_shader_location("renderWidth");
@@ -114,8 +114,8 @@ fn main() {
 
     'window: while !rl.window_should_close() {
         if rl.is_window_resized() {
-            let width = u32::try_from(rl.get_render_width()).unwrap()*UPSCALE as u32;
-            let height = u32::try_from(rl.get_render_height()).unwrap()*UPSCALE as u32;
+            let width = u32::try_from(rl.get_screen_width()).unwrap()*UPSCALE as u32;
+            let height = u32::try_from(rl.get_screen_height()).unwrap()*UPSCALE as u32;
             framebuffer = rl.load_render_texture(&thread, width, height).unwrap();
             shader.set_shader_value(shader_render_width_loc, width as f32);
             shader.set_shader_value(shader_render_height_loc, height as f32);
@@ -395,8 +395,8 @@ fn main() {
                 d.draw_capsule((camera.target + Vector3::new( 0.0, 0.0, -5.0))*SCALE_FACTOR, (camera.target + Vector3::new(0.0, 0.0, 5.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
             }
 
-            d.draw_rectangle_rec(Rectangle::new((mouse_tracking.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_render_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
-            d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_tracking.y - 1.5)*UPSCALE, d.get_render_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
+            d.draw_rectangle_rec(Rectangle::new((mouse_tracking.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_screen_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
+            d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_tracking.y - 1.5)*UPSCALE, d.get_screen_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
 
             for (v, vert) in graph.verts_iter() {
                 let pos = d.get_world_to_screen(vert.pos, camera);
@@ -420,7 +420,7 @@ fn main() {
         {
             let mut d = d.begin_shader_mode(&mut shader);
             let src = Rectangle::new(0.0, 0.0, framebuffer.width() as f32, -framebuffer.height() as f32);
-            let dst = Rectangle::new(0.0, 0.0, d.get_render_width() as f32, d.get_render_height() as f32);
+            let dst = Rectangle::new(0.0, 0.0, d.get_screen_width() as f32, d.get_screen_height() as f32);
             d.draw_texture_pro(&framebuffer, src, dst, Vector2::zero(), 0.0, Color::WHITE);
         }
 
@@ -430,7 +430,7 @@ fn main() {
                 d.draw_text_ex(
                     &font,
                     "use W/A/S/D to pan, Q/E to zoom, and R/F/Z/X to orbit",
-                    Vector2::new(SAFE_ZONE, (d.get_render_height() - font.baseSize*3) as f32 - SAFE_ZONE),
+                    Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize*3) as f32 - SAFE_ZONE),
                     font.baseSize as f32,
                     0.0,
                     Color::GREENYELLOW,
@@ -444,7 +444,7 @@ fn main() {
                 } else {
                     "press ENTER to begin typing a command"
                 },
-                Vector2::new(SAFE_ZONE, (d.get_render_height() - font.baseSize*2) as f32 - SAFE_ZONE),
+                Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize*2) as f32 - SAFE_ZONE),
                 font.baseSize as f32,
                 0.0,
                 Color::GREENYELLOW,
@@ -453,7 +453,7 @@ fn main() {
             d.draw_text_ex(
                 &font,
                 &format!("x:{}/y:{}", camera.target.x, camera.target.z),
-                Vector2::new(SAFE_ZONE, (d.get_render_height() - font.baseSize) as f32 - SAFE_ZONE),
+                Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize) as f32 - SAFE_ZONE),
                 font.baseSize as f32,
                 0.0,
                 Color::GREENYELLOW,
@@ -463,7 +463,7 @@ fn main() {
                 let font_size = font.baseSize as f32;
                 let spacing = 0.0;
                 let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
-                let max_history_lines = ((d.get_render_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
+                let max_history_lines = ((d.get_screen_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
 
                 let (mut c_out, mut c_in) = (cout(), cin());
 
