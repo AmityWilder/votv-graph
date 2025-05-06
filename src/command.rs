@@ -178,6 +178,10 @@ define_commands!{
         )]
         SvRouteAdd,
 
+        #[input("sv.route.list")]
+        #[usage(case(args(), desc = "List the order of the targets in the current route"))]
+        SvRouteList,
+
         #[input("sv.route.clear")]
         #[usage(case(args(), desc = "Clear the ongoing route"))]
         SvRouteClear,
@@ -213,6 +217,14 @@ define_commands!{
             case(args(),                         desc = "Print the current tempo"),
         )]
         Tempo,
+
+        #[input("skip")]
+        #[usage(case(args("<COUNT> [ANY]..."), desc = "Skip the specified number of arguments and pass the rest as output"))]
+        Skip,
+
+        #[input("take")]
+        #[usage(case(args("<COUNT> [ANY]..."), desc = "Return the specified number of arguments"))]
+        Take,
     }
 }
 
@@ -351,10 +363,15 @@ impl Cmd {
             .map(|(usage, desc)| format!("{usage:<0$}  {desc}", width))
             .collect::<Vec<_>>();
 
-        let msg = std::iter::once("<color = #48f19d>Commands:</color>")
-            .chain(lines.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join("\n    ");
+        let msg =
+            std::iter::once("<color = #48f19d>Commands:</color>")
+                .chain(lines.iter().map(String::as_str))
+                .chain([
+                    "\n<color = #48f19d>Operators:</color>",
+                    "<color = #0096e6>|</color>                                    Perform two commands sequentially, sending the output of the first as arguments to the second",
+                ].into_iter())
+                .collect::<Vec<_>>()
+                .join("\n    ");
 
         console_log!(cout, Info, "{msg}");
     }
@@ -546,7 +563,7 @@ impl Cmd {
     ) -> bool {
         if let Some(cmd_line) = cin.submit_cmd(cout).map(|s| s.to_string()) {
             cmd_line
-                .split(['|', ';'])
+                .split('|')
                 .scan((false, String::new()), |(is_awaited, prev_ret), cmd_args| {
                     match Cmd::parse(cmd_args) {
                         Some(Ok((mut cmd, args))) => {
@@ -568,10 +585,40 @@ impl Cmd {
                                         Ok(CmdMessage::None)
                                     }
                                     Cmd::Echo => {
-                                        console_log!(cout, Info, "{}", args.collect::<Vec<_>>().join(" "));
-                                        Ok(CmdMessage::None)
+                                        let value = args.collect::<Vec<_>>().join(" ");
+                                        console_log!(cout, Info, "{value}");
+                                        Ok(CmdMessage::Return(value))
+                                    }
+                                    Cmd::Skip => {
+                                        if let Some(n) = args.next().and_then(|n| n.parse().ok()) {
+                                            Ok(CmdMessage::Return(args.skip(n).collect::<Vec<&str>>().join(" ")))
+                                        } else {
+                                            Err(CmdError::CheckUsage(Cmd::Skip))
+                                        }
+                                    }
+                                    Cmd::Take => {
+                                        if let Some(n) = args.next().and_then(|n| n.parse().ok()) {
+                                            Ok(CmdMessage::Return(args.take(n).collect::<Vec<&str>>().join(" ")))
+                                        } else {
+                                            Err(CmdError::CheckUsage(Cmd::Take))
+                                        }
                                     }
                                     Cmd::Await => unreachable!(),
+                                    Cmd::SvRouteList => {
+                                        if let Some(route) = route {
+                                            let list = route.result()
+                                                .into_iter()
+                                                .copied()
+                                                .map(|id| graph.vert(id).id.as_str())
+                                                .collect::<Vec<&str>>();
+
+                                            console_log!(cout, Info, "targets: {}", list.join(", "));
+                                            Ok(CmdMessage::Return(list.join(" ")))
+                                        } else {
+                                            console_log!(cout, Info, "no ongoing route");
+                                            Ok(CmdMessage::Return(String::new()))
+                                        }
+                                    }
                                     Cmd::SvRoute | Cmd::SvRouteAdd => {
                                         let result = match cmd {
                                             Cmd::SvRoute    => Cmd::run_sv_route    (cout, cin, graph, route, std::mem::take(interactive_targets), args),
