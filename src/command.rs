@@ -73,7 +73,7 @@ pub enum FromCmdError {
 impl std::fmt::Display for FromCmdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unknown(cmd) => write!(f, "no such command: `{cmd}`"),
+            Self::Unknown(cmd) => write!(f, "The term '{cmd}' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again."),
         }
     }
 }
@@ -143,6 +143,14 @@ define_commands!{
         #[input("cls")]
         #[usage(case(args(), desc = "Clear the console"))]
         Cls,
+
+        #[input("echo")]
+        #[usage(case(args(), desc = "Print the input to the console"))]
+        Echo,
+
+        #[input("await")]
+        #[usage(case(args(), desc = "Execute the arguments as an asynchronous command, blocking until complete"))]
+        Await,
 
         #[input("dbg")]
         #[usage(case(args(), desc = "Toggle debug messages"))]
@@ -539,16 +547,31 @@ impl Cmd {
         if let Some(cmd_line) = cin.submit_cmd(cout).map(|s| s.to_string()) {
             cmd_line
                 .split(['|', ';'])
-                .scan(String::new(), |prev_ret, cmd_args| {
+                .scan((false, String::new()), |(is_awaited, prev_ret), cmd_args| {
                     match Cmd::parse(cmd_args) {
-                        Some(Ok((cmd, args))) => {
+                        Some(Ok((mut cmd, args))) => {
                             let result = {
-                                let args = args.chain(prev_ret.as_str().split_whitespace()).filter(|arg| !arg.is_empty());
+                                let mut args = args.chain(prev_ret.as_str().split_whitespace()).filter(|arg| !arg.is_empty());
+                                while matches!(cmd, Cmd::Await) {
+                                    *is_awaited = true;
+                                    match Cmd::try_from_str(args.next().unwrap_or_default()) {
+                                        Ok(x) => cmd = x,
+                                        Err(e) => {
+                                            console_log!(cout, Error, "{e}");
+                                            return None;
+                                        }
+                                    }
+                                }
                                 match cmd {
                                     Cmd::Help => {
                                         Cmd::run_help(cout);
                                         Ok(CmdMessage::None)
                                     }
+                                    Cmd::Echo => {
+                                        console_log!(cout, Info, "{}", args.collect::<Vec<_>>().join(" "));
+                                        Ok(CmdMessage::None)
+                                    }
+                                    Cmd::Await => unreachable!(),
                                     Cmd::SvRoute | Cmd::SvRouteAdd => {
                                         let result = match cmd {
                                             Cmd::SvRoute    => Cmd::run_sv_route    (cout, cin, graph, route, std::mem::take(interactive_targets), args),
@@ -561,10 +584,24 @@ impl Cmd {
                                             Ok(CmdMessage::None)
                                         } else {
                                             *is_giving_interactive_targets = false;
-                                            result.map(|x| {
-                                                debug_assert!(matches!(x, CmdMessage::None));
-                                                CmdMessage::None
-                                            })
+                                            if result.is_ok() && *is_awaited {
+                                                let route = route.as_mut().unwrap();
+                                                loop {
+                                                    route.step(cout, graph);
+                                                    if route.is_finished() {
+                                                        let s = route.result()
+                                                            .into_iter()
+                                                            .copied()
+                                                            .map(|id| graph.vert(id).id.as_str())
+                                                            .collect::<Vec<&str>>()
+                                                            .join(" ");
+
+                                                        break Ok(CmdMessage::Return(s));
+                                                    }
+                                                }
+                                            } else {
+                                                result
+                                            }
                                         }
                                     }
                                     Cmd::SvRouteClear => {
@@ -593,6 +630,7 @@ impl Cmd {
                                 }
                             };
 
+                            *is_awaited = false;
                             prev_ret.clear();
 
                             match result {
