@@ -265,6 +265,28 @@ impl From<std::io::Error> for CmdError {
     }
 }
 
+#[derive(Debug)]
+pub enum CmdMessage<T = ()> {
+    None,
+    Return(T),
+    RequestInteractiveTargets,
+    Exit,
+}
+
+impl<T> CmdMessage<T> {
+    pub fn _map<U, F>(self, f: F) -> CmdMessage<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        match self {
+            Self::None => CmdMessage::None,
+            Self::Return(ret) => CmdMessage::Return(f(ret)),
+            Self::RequestInteractiveTargets => CmdMessage::RequestInteractiveTargets,
+            Self::Exit => CmdMessage::Exit,
+        }
+    }
+}
+
 pub type CmdResult<T> = Result<T, CmdError>;
 
 impl Cmd {
@@ -277,16 +299,16 @@ impl Cmd {
             )
     }
 
-    pub fn run_focus(
-        graph: &WeightedGraph,
-        camera: &mut Camera3D,
-        mut args: std::str::Split<'_, char>,
-    ) -> CmdResult<()> {
+    pub fn run_focus<'g, 'c, 'args>(
+        graph: &'g WeightedGraph,
+        camera: &'c mut Camera3D,
+        mut args: impl Iterator<Item = &'args str>,
+    ) -> CmdResult<CmdMessage<&'g str>> {
         if let Some(target) = args.next() {
             if target == "reset" {
                 camera.position = CAMERA_POSITION_DEFAULT;
                 camera.target = Vector3::zero();
-                Ok(())
+                Ok(CmdMessage::None)
             } else {
                 let vert = graph.verts().iter()
                     .find(|vert| (vert.id.eq_ignore_ascii_case(target) || vert.alias.eq_ignore_ascii_case(target)));
@@ -294,7 +316,7 @@ impl Cmd {
                 if let Some(vert) = vert {
                     camera.target = vert.pos;
                     camera.position = camera.target + Vector3::new(0.0, 400.0, 0.0);
-                    Ok(())
+                    Ok(CmdMessage::None)
                 } else {
                     Err(CmdError::VertexDNE(target.to_string()))
                 }
@@ -303,12 +325,14 @@ impl Cmd {
             let vert = graph.verts().iter()
                 .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, camera.target, 1.0));
 
-            if let Some(target) = vert {
+            let id = if let Some(target) = vert {
                 console_log!(Info, "currently focusing vertex {}", target.id);
+                target.id.as_str()
             } else {
                 console_log!(Info, "no vertex is currently focused");
-            }
-            Ok(())
+                ""
+            };
+            Ok(CmdMessage::Return(id))
         }
     }
 
@@ -340,12 +364,12 @@ impl Cmd {
         console_log!(Info, "{msg}");
     }
 
-    pub fn run_sv_route(
-        graph: &WeightedGraph,
-        route: &mut Option<RouteGenerator>,
+    pub fn run_sv_route<'g, 'r, 'args>(
+        graph: &'g WeightedGraph,
+        route: &'r mut Option<RouteGenerator>,
         interactive_targets: Vec<VertexID>,
-        args: std::str::Split<'_, char>,
-    ) -> CmdResult<bool> {
+        args: impl Iterator<Item = &'args str>,
+    ) -> CmdResult<CmdMessage> {
         let mut args = args.peekable();
         let targets = match args.peek() {
             Some(&("-i" | "interactive")) => {
@@ -353,7 +377,7 @@ impl Cmd {
                 console_log!(Info, "click a target again to un-target it");
                 console_log!(Info, "run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished");
                 cin().insert_over_selection("sv.route");
-                return Ok(false);
+                return Ok(CmdMessage::RequestInteractiveTargets);
             }
             Some(_) => {
                 args
@@ -370,15 +394,15 @@ impl Cmd {
         }
         *route = Some(RouteGenerator::new(graph.verts().len(), start, target_iter));
         console_log!(Info, "generating route");
-        Ok(true)
+        Ok(CmdMessage::None)
     }
 
-    pub fn run_sv_route_add(
-        graph: &WeightedGraph,
-        route: &mut Option<RouteGenerator>,
+    pub fn run_sv_route_add<'g, 'r, 'args>(
+        graph: &'g WeightedGraph,
+        route: &'r mut Option<RouteGenerator>,
         interactive_targets: Vec<VertexID>,
-        args: std::str::Split<'_, char>,
-    ) -> CmdResult<bool> {
+        args: impl Iterator<Item = &'args str>,
+    ) -> CmdResult<CmdMessage> {
         let route = route.as_mut().ok_or(CmdError::NoExistingRoute)?;
         let mut args = args.peekable();
         let targets = match args.peek() {
@@ -387,7 +411,7 @@ impl Cmd {
                 console_log!(Info, "click a target again to un-target it");
                 console_log!(Info, "run the command `<color = #0096e6>sv.route.add</color>` (without arguments) when finished");
                 cin().insert_over_selection("sv.route.add");
-                return Ok(false);
+                return Ok(CmdMessage::RequestInteractiveTargets);
             }
             Some(_) => {
                 args
@@ -401,14 +425,14 @@ impl Cmd {
         }
         route.add_targets(targets);
         console_log!(Info, "extending route");
-        Ok(true)
+        Ok(CmdMessage::None)
     }
 
-    pub fn run_sv_new(
-        graph: &mut WeightedGraph,
-        route: &mut Option<RouteGenerator>,
+    pub fn run_sv_new<'g, 'r, 'args>(
+        graph: &'g mut WeightedGraph,
+        route: &'r mut Option<RouteGenerator>,
         camera: Camera3D,
-        mut args: std::str::Split<'_, char>,
+        mut args: impl Iterator<Item = &'args str>,
     ) -> CmdResult<()> {
         let id = args.next().ok_or(CmdError::CheckUsage(Cmd::SvNew))?;
         let mut alias = args.next();
@@ -424,10 +448,10 @@ impl Cmd {
         Ok(())
     }
 
-    pub fn run_sv_edge(
-        graph: &mut WeightedGraph,
-        route: &mut Option<RouteGenerator>,
-        mut args: std::str::Split<'_, char>,
+    pub fn run_sv_edge<'g, 'r, 'args>(
+        graph: &'g mut WeightedGraph,
+        route: &'r mut Option<RouteGenerator>,
+        mut args: impl Iterator<Item = &'args str>,
     ) -> CmdResult<()> {
         let a = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
         let b = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
@@ -443,9 +467,9 @@ impl Cmd {
         Ok(())
     }
 
-    pub fn run_tempo(
-        mut args: std::str::Split<'_, char>,
-        tempo: &mut Tempo,
+    pub fn run_tempo<'t, 'args>(
+        tempo: &'t mut Tempo,
+        mut args: impl Iterator<Item = &'args str>,
     ) -> CmdResult<()> {
         if let Some(arg) = args.next() {
             if arg == "reset" {
@@ -472,10 +496,10 @@ impl Cmd {
         Ok(())
     }
 
-    pub fn run_sv_load(
+    pub fn run_sv_load<'args>(
         graph: &mut WeightedGraph,
         route: &mut Option<RouteGenerator>,
-        mut args: std::str::Split<'_, char>,
+        mut args: impl Iterator<Item = &'args str>,
     ) -> CmdResult<()> {
         if let Some(path_str) = args.next() {
             let path = Path::new(path_str);
@@ -489,9 +513,9 @@ impl Cmd {
         }
     }
 
-    pub fn run_sv_save(
+    pub fn run_sv_save<'args>(
         graph: &mut WeightedGraph,
-        mut args: std::str::Split<'_, char>,
+        mut args: impl Iterator<Item = &'args str>,
     ) -> CmdResult<()> {
         if let Some(path_str) = args.next() {
             let path = Path::new(path_str);
@@ -503,4 +527,69 @@ impl Cmd {
             Err(CmdError::CheckUsage(Cmd::SvLoad))
         }
     }
+
+    // pub fn _run<'g, 'r, 'is_d, 'is_i, 'i, 'c, 't, 'args>(
+    //     self,
+    //     graph:                         &'g    mut WeightedGraph,
+    //     route:                         &'r    mut Option<RouteGenerator>,
+    //     is_debugging:                  &'is_d mut bool,
+    //     is_giving_interactive_targets: &'is_i mut bool,
+    //     interactive_targets:           &'i    mut Vec<VertexID>,
+    //     camera:                        &'c    mut Camera3D,
+    //     tempo:                         &'t    mut Tempo,
+    //     args:                          impl Iterator<Item = &'args str>,
+    // ) -> CmdResult<CmdMessage<String>> {
+    //     match self {
+    //         Cmd::Help => {
+    //             drop(args);
+    //             Cmd::run_help();
+    //             Ok(CmdMessage::None)
+    //         }
+    //         Cmd::SvRoute | Cmd::SvRouteAdd => {
+    //             let result = match self {
+    //                 Cmd::SvRoute    => Cmd::run_sv_route    (&graph, route, std::mem::take(interactive_targets), args),
+    //                 Cmd::SvRouteAdd => Cmd::run_sv_route_add(&graph, route, std::mem::take(interactive_targets), args),
+    //                 _ => unreachable!(),
+    //             };
+    //             if matches!(result, Ok(CmdMessage::RequestInteractiveTargets)) {
+    //                 *is_giving_interactive_targets = true;
+    //                 cin().unfocus();
+    //                 Ok(CmdMessage::None)
+    //             } else {
+    //                 *is_giving_interactive_targets = false;
+    //                 result.map(|x| {
+    //                     debug_assert!(matches!(x, CmdMessage::None));
+    //                     CmdMessage::None
+    //                 })
+    //             }
+    //         }
+    //         Cmd::SvRouteClear => {
+    //             drop(args);
+    //             *route = None;
+    //             console_log!(Info, "route cleared");
+    //             Ok(CmdMessage::None)
+    //         },
+    //         Cmd::SvNew => Cmd::run_sv_new(graph, route, *camera, args).map(|()| CmdMessage::None),
+    //         Cmd::SvEdge => Cmd::run_sv_edge(graph, route, args).map(|()| CmdMessage::None),
+    //         Cmd::SvLoad => Cmd::run_sv_load(graph, route, args).map(|()| CmdMessage::None),
+    //         Cmd::SvSave => Cmd::run_sv_save(graph, args).map(|()| CmdMessage::None),
+    //         Cmd::Tempo => Cmd::run_tempo(tempo, args).map(|()| CmdMessage::None),
+    //         Cmd::Dbg => {
+    //             drop(args);
+    //             *is_debugging = !*is_debugging;
+    //             console_log!(Info, "debugging is now {}", if *is_debugging { "on" } else { "off" });
+    //             Ok(CmdMessage::None)
+    //         }
+    //         Cmd::Focus => Cmd::run_focus(graph, camera, args).map(|x| x.map(|x| x.to_string())),
+    //         Cmd::Cls => {
+    //             drop(args);
+    //             cout().clear_log();
+    //             Ok(CmdMessage::None)
+    //         }
+    //         Cmd::Close => {
+    //             drop(args);
+    //             Ok(CmdMessage::Exit)
+    //         }
+    //     }
+    // }
 }

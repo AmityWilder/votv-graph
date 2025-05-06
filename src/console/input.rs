@@ -121,16 +121,10 @@ impl ConsoleIn {
         );
     }
 
-    #[inline]
-    pub fn insert_char_over_selection(&mut self, ch: char) {
-        let mut buf = [b'\0'; 4];
-        self.insert_over_selection(ch.encode_utf8(&mut buf));
-    }
-
     fn apply_input(&mut self, rl: &mut RaylibHandle, input: KeyOrChar, is_ctrl_down: bool, is_shift_down: bool, _is_alt_down: bool) -> bool {
         match input {
             KeyOrChar::Char(ch) => {
-                self.insert_char_over_selection(ch);
+                self.insert_over_selection(ch.encode_utf8(&mut [b'\0'; 4]));
                 return true;
             }
 
@@ -146,7 +140,12 @@ impl ConsoleIn {
                             }
                         }
 
-                        KEY_V => if let Ok(clipboard) = rl.get_clipboard_text() {
+                        KEY_V => if let Ok(mut clipboard) = rl.get_clipboard_text() {
+                            clipboard = clipboard
+                                .lines()
+                                .collect::<Vec<&str>>()
+                                .join(";");
+
                             self.insert_over_selection(&clipboard);
                             return true;
                         }
@@ -196,6 +195,8 @@ impl ConsoleIn {
                         self.history_offset.checked_sub(1).unwrap_or(self.history.len() + 1 - 1)
                     };
 
+                    self.selection_head = 0;
+                    self.selection_tail = self.current.len();
                     Self::insert_over_selection_internal(
                         &mut self.current,
                         &mut self.selection_head,
@@ -288,7 +289,7 @@ impl ConsoleIn {
     }
 
     pub fn submit_cmd(&mut self) -> Option<&str> {
-        (!self.current.is_empty()).then(|| {
+        (!self.current.trim().is_empty()).then(|| {
             let msg = std::mem::take(&mut self.current);
             self.history.push_front(msg.clone());
             self.history_offset = self.history.len();
