@@ -7,6 +7,8 @@ use KeyboardKey::*;
 pub mod words;
 use words::WordsEx;
 
+use super::output::ConsoleOut;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum KeyOrChar {
     Char(char),
@@ -288,12 +290,12 @@ impl ConsoleIn {
         false
     }
 
-    pub fn submit_cmd(&mut self) -> Option<&str> {
+    pub fn submit_cmd(&mut self, cout: &mut ConsoleOut) -> Option<&str> {
         (!self.current.trim().is_empty()).then(|| {
             let msg = std::mem::take(&mut self.current);
             self.history.push_front(msg.clone());
             self.history_offset = self.history.len();
-            console_log!(Ghost, "{msg}");
+            console_log!(cout, Ghost, "{msg}");
             self.selection_head = 0;
             self.selection_tail = 0;
             self.history.front()

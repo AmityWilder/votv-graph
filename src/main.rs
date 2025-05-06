@@ -8,8 +8,10 @@
 
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
-use console::{cin, console_log, cout, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{Cmd, CmdMessage, Tempo};
+use console::input::ConsoleIn;
+use console::output::ConsoleOut;
+use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
+use command::{Cmd, Tempo};
 use graph::WeightedGraph;
 use raylib::prelude::*;
 use route::{VertexClass, Visit};
@@ -36,34 +38,14 @@ const SAFE_ZONE: f32 = 20.0;
 const UPSCALE: f32 = 2.0;
 
 fn main() {
-    set_trace_log_callback(|lv, msg|
-        match lv {
-            | TraceLogLevel::LOG_TRACE
-            | TraceLogLevel::LOG_DEBUG
-            | TraceLogLevel::LOG_INFO
-                => {
-                // if cfg!(debug_assertions) {
-                //     console_log!(lv.try_into().unwrap(), "Raylib: {msg}");
-                // }{}}{dsadas }
-            }
-
-            | TraceLogLevel::LOG_WARNING
-            | TraceLogLevel::LOG_ERROR
-                => {
-                if cfg!(debug_assertions) { eprintln!("{msg}"); }
-                console_log!(lv.try_into().unwrap(), "Raylib: {msg}");
-            }
-
-            TraceLogLevel::LOG_FATAL => eprintln!("{msg}"),
-            _ => (),
-        })
-        .unwrap();
+    let mut cin = ConsoleIn::new();
+    let mut cout = ConsoleOut::new();
 
     let mut is_debugging = false;
 
     let mut graph = WeightedGraph::load_from_memory(include_str!("resources/votv.graph"))
         .unwrap_or_else(|e| {
-            console_log!(Error, "error loading hard-coded map: {e}");
+            console_log!(cout, Error, "error loading hard-coded map: {e}");
             WeightedGraph::new(Vec::new(), Vec::new())
         });
 
@@ -137,125 +119,37 @@ fn main() {
         mouse_tracking = mouse_tracking.lerp(mouse_snapped, 1.0);
 
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
-            cin().unfocus();
+            cin.unfocus();
             // console.command.clear();
         }
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
-            if cin().is_focused() {
+            if cin.is_focused() {
                 // finish giving command
-                if let Some(cmd_line) = cin().submit_cmd().map(|s| s.to_string()) {
-                    let it = cmd_line
-                        .split(['|', ';'])
-                        .map(|x| x.trim())
-                        .map(Cmd::parse)
-                        .scan(String::new(), |prev_ret, cmd_args|
-                            match cmd_args {
-                                Some(Ok((cmd, args))) => {
-                                    // let args = args.chain(prev_ret.as_str().split(' '));
-                                    let result = match cmd {
-                                        Cmd::Help => {
-                                            drop(args);
-                                            Cmd::run_help();
-                                            Ok(CmdMessage::None)
-                                        }
-                                        Cmd::SvRoute | Cmd::SvRouteAdd => {
-                                            let result = match cmd {
-                                                Cmd::SvRoute    => Cmd::run_sv_route    (&graph, &mut route, std::mem::take(&mut interactive_targets), args),
-                                                Cmd::SvRouteAdd => Cmd::run_sv_route_add(&graph, &mut route, std::mem::take(&mut interactive_targets), args),
-                                                _ => unreachable!(),
-                                            };
-                                            if matches!(result, Ok(CmdMessage::RequestInteractiveTargets)) {
-                                                is_giving_interactive_targets = true;
-                                                cin().unfocus();
-                                                Ok(CmdMessage::None)
-                                            } else {
-                                                is_giving_interactive_targets = false;
-                                                result.map(|x| {
-                                                    debug_assert!(matches!(x, CmdMessage::None));
-                                                    CmdMessage::None
-                                                })
-                                            }
-                                        }
-                                        Cmd::SvRouteClear => {
-                                            drop(args);
-                                            route = None;
-                                            console_log!(Info, "route cleared");
-                                            Ok(CmdMessage::None)
-                                        },
-                                        Cmd::SvNew => Cmd::run_sv_new(&mut graph, &mut route, camera, args).map(|()| CmdMessage::None),
-                                        Cmd::SvEdge => Cmd::run_sv_edge(&mut graph, &mut route, args).map(|()| CmdMessage::None),
-                                        Cmd::SvLoad => Cmd::run_sv_load(&mut graph, &mut route, args).map(|()| CmdMessage::None),
-                                        Cmd::SvSave => Cmd::run_sv_save(&mut graph, args).map(|()| CmdMessage::None),
-                                        Cmd::Tempo => Cmd::run_tempo(&mut tempo, args).map(|()| CmdMessage::None),
-                                        Cmd::Dbg => {
-                                            drop(args);
-                                            is_debugging = !is_debugging;
-                                            console_log!(Info, "debugging is now {}", if is_debugging { "on" } else { "off" });
-                                            Ok(CmdMessage::None)
-                                        }
-                                        Cmd::Focus => Cmd::run_focus(&mut graph, &mut camera, args),
-                                        Cmd::Cls => {
-                                            drop(args);
-                                            cout().clear_log();
-                                            Ok(CmdMessage::None)
-                                        }
-                                        Cmd::Close => {
-                                            drop(args);
-                                            Ok(CmdMessage::Exit)
-                                        }
-                                    };
-
-                                    prev_ret.clear();
-
-                                    match result {
-                                        Ok(CmdMessage::Return(s)) => {
-                                            prev_ret.push_str(&s);
-                                        }
-                                        Ok(CmdMessage::None) => {}
-                                        Ok(CmdMessage::Exit) => return Some(true),
-                                        Ok(CmdMessage::RequestInteractiveTargets) => unreachable!(),
-                                        Err(e) => {
-                                            use std::error::Error;
-                                            use std::fmt::Write;
-                                            let mut indent = 0;
-                                            let mut e: &dyn Error = &e;
-                                            let mut msg = e.to_string();
-                                            while let Some(src) = e.source() {
-                                                indent += 1;
-                                                write!(msg, "\n{:1$}{src}", "", 2*indent).unwrap();
-                                                e = src;
-                                            }
-                                            console_log!(Error, "{msg}");
-                                            return None;
-                                        }
-                                    }
-                                    Some(false)
-                                }
-                                Some(Err(e)) => {
-                                    console_log!(Error, "{e}");
-                                    None
-                                }
-                                None => None,
-                            }
-                        );
-
-                    for should_close in it {
-                        if should_close {
-                            break 'window;
-                        }
-                    }
+                let should_close = Cmd::run(
+                    &mut cout,
+                    &mut cin,
+                    &mut graph,
+                    &mut route,
+                    &mut is_debugging,
+                    &mut is_giving_interactive_targets,
+                    &mut interactive_targets,
+                    &mut camera,
+                    &mut tempo,
+                );
+                if should_close {
+                    break 'window;
                 }
             } else {
                 // begin giving command
-                cin().focus();
+                cin.focus();
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
             }
         }
 
-        let is_input_changed = cin().update_input(&mut rl);
+        let is_input_changed = cin.update_input(&mut rl);
 
-        if cin().is_focused() {
+        if cin.is_focused() {
             const BLINK_TIME: Duration = Duration::from_millis(500);
             if is_input_changed {
                 is_cursor_shown = true;
@@ -280,10 +174,10 @@ fn main() {
         if is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
             if let Some(v) = hovered_vert {
                 if let Some(p) = interactive_targets.iter().position(|x| x == &v) {
-                    console_log!(Info, "removing vertex {} from route", graph.vert(v).id);
+                    console_log!(cout, Info, "removing vertex {} from route", graph.vert(v).id);
                     interactive_targets.remove(p);
                 } else {
-                    console_log!(Info, "adding vertex {} to route", graph.vert(v).id);
+                    console_log!(cout, Info, "adding vertex {} to route", graph.vert(v).id);
                     interactive_targets.push(v);
                 }
             }
@@ -293,7 +187,7 @@ fn main() {
             match &tempo {
                 Tempo::Sync => {
                     if !route.is_finished() {
-                        route.step(&graph);
+                        route.step(&mut cout, &graph);
                     }
                 }
 
@@ -301,13 +195,13 @@ fn main() {
                     let target_duration = Duration::from_secs_f32(0.5/rl.get_fps() as f32);
                     let start = Instant::now();
                     while !route.is_finished() && start.elapsed() < target_duration {
-                        route.step(&graph);
+                        route.step(&mut cout, &graph);
                     }
                 }
 
                 Tempo::Instant => {
                     while !route.is_finished() {
-                        route.step(&graph);
+                        route.step(&mut cout, &graph);
                     }
                 }
 
@@ -318,7 +212,7 @@ fn main() {
                     let ticks = ticks.get() as u128*ms_elapsed/(NonZeroU128::from(*ms));
                     for _ in 0..ticks {
                         if route.is_finished() { break; }
-                        route.step(&graph);
+                        route.step(&mut cout, &graph);
                     }
                 }
             }
@@ -426,7 +320,7 @@ fn main() {
 
         // Console
         {
-            if !cin().is_focused() {
+            if !cin.is_focused() {
                 d.draw_text_ex(
                     &font,
                     "use W/A/S/D to pan, Q/E to zoom, and R/F/Z/X to orbit",
@@ -439,7 +333,7 @@ fn main() {
 
             d.draw_text_ex(
                 &font,
-                if cin().is_focused() {
+                if cin.is_focused() {
                     "press ENTER to run the command, or ESCAPE to cancel"
                 } else {
                     "press ENTER to begin typing a command"
@@ -465,7 +359,7 @@ fn main() {
                 let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
                 let max_history_lines = ((d.get_screen_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
 
-                let (mut c_out, mut c_in) = (cout(), cin());
+                let (c_out, c_in) = (&mut cout, &mut cin);
 
                 let display_cursor = c_in.is_focused() && is_cursor_shown;
                 let (selection_range, selection_tail) = (c_in.selection_range(), c_in.selection_tail());
@@ -516,8 +410,6 @@ fn main() {
                     c_in.mark_clean();
                     c_out.mark_clean();
                 }
-                drop(c_in);
-                drop(c_out);
 
                 let (init, sample) = console_buf.split_at(
                     console_buf.match_indices('\n')
@@ -528,6 +420,7 @@ fn main() {
 
                 let mut point = Vector2::new(SAFE_ZONE, SAFE_ZONE);
                 let char_step = Vector2::new(char_width + spacing, font_size);
+                d.set_text_line_spacing(0);
                 for (text, color) in sample.enrich(Color::WHITE, init) {
                     d.draw_text_ex(&font, text, point, font_size, spacing, color);
 
