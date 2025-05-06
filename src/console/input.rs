@@ -142,8 +142,16 @@ impl ConsoleIn {
                             }
                         }
 
-                        KEY_V => if let Ok(mut clipboard) = rl.get_clipboard_text() {
-                            clipboard = clipboard
+                        KEY_V => if let Some(clipboard) = {
+                            // hack until raylib-rs fixes crash
+                            unsafe {
+                                let s = ffi::GetClipboardText();
+                                if !s.is_null() && s.is_aligned() {
+                                    std::ffi::CStr::from_ptr(s).to_str().ok()
+                                } else { None }
+                            }
+                        } {
+                            let clipboard = clipboard
                                 .lines()
                                 .collect::<Vec<&str>>()
                                 .join(";");
