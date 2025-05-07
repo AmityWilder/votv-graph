@@ -84,7 +84,7 @@ macro_rules! define_commands {
         $(#[$enum_meta:meta])*
         $vis:vis enum $Enum:ident {$(
             #[input($input:literal $(,)?)]
-            #[usage($(case(args($($args:literal),* $(,)?), desc = $description:literal)),+ $(,)?)]
+            #[usage($(case(args($($args:literal { $arg_pattern:expr }),* $(,)?), desc = $description:literal)),+ $(,)?)]
             $(#[$variant_meta:meta])*
             $Variant:ident
         ),* $(,)?}
@@ -135,7 +135,7 @@ define_commands!{
         #[input("help")]
         #[usage(
             case(args(), desc = "Display this information"),
-            case(args("<COMMAND>"), desc = "Display help info about a particular command"),
+            case(args("<COMMAND>" { |_, s| Cmd::LIST.contains(s) }), desc = "Display help info about a particular command"),
         )]
         Help,
 
@@ -161,15 +161,15 @@ define_commands!{
 
         #[input("focus")]
         #[usage(
-            case(args("<ID|ALIAS>"), desc = "Zoom in on a particular target"),
-            case(args("reset"),      desc = "Reset camera orientation"),
+            case(args("<ID|ALIAS>" { |data, s| data.graph.verts.contains(s) }), desc = "Zoom in on a particular target"),
+            case(args("reset" { |_, s| s == "reset" }),      desc = "Reset camera orientation"),
             case(args(),             desc = "Print the name of the focused vertex"),
         )]
         Focus,
 
         #[input("color.verts")]
         #[usage(
-            case(args("#<HEXCODE>"),                            desc = "Set the color of vertices with a hexcode"),
+            case(args("#<HEXCODE>" {}),                            desc = "Set the color of vertices with a hexcode"),
             case(args("rgb(<RED>, <GREEN>, <BLUE>)"),           desc = "Set the color of vertices with RGB"),
             case(args("rgba(<RED>, <GREEN>, <BLUE>, <ALPHA>)"), desc = "Set the color of vertices with RGB and transparency"),
             case(args("<NAME> [<OPACITY>%]"),                   desc = "Set the color of vertices to a named color"),
@@ -328,6 +328,29 @@ impl Cmd {
                 Cmd::try_from_str(first)
                     .map(|cmd| (cmd, args))
             )
+    }
+
+    pub fn predict(s: &str) -> _ {
+        debug_assert!(!s.is_empty(), "prediction request should not be empty");
+        let current_line = s.rsplit_once('|').map_or(s, |(_, s)| s).split_whitespace().peekable();
+        current_line.scan(, |s| s.)
+        let num_args = current_line.clone().count();
+        if num_args != 0 {
+            let first_arg = current_line.next();
+            if num_args == 1 {
+                Cmd::LIST.iter()
+                    .copied()
+                    .filter_map(|cmd| {
+                        cmd.input()
+                            .strip_prefix(&*s)
+                            .map(|rem| (cmd, rem))
+                    })
+            } else {
+
+            }
+        } else {
+            None
+        }
     }
 
     pub fn run_focus<'g, 'args>(

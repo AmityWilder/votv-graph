@@ -450,6 +450,7 @@ fn main() {
                 }
 
                 {
+                    const COLOR: Color = ConsoleLineCategory::Command.color_prefix().0;
                     const PREFIX_LEN: usize = ConsoleLineCategory::Command.color_prefix().1.len();
                     let row = sample.lines().count().saturating_sub(1);
                     let selection_y = SAFE_ZONE + row as f32*font_size;
@@ -461,6 +462,13 @@ fn main() {
                     );
                     if selection_range.len() > 0 {
                         d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.25));
+                    } else if !cin.current().is_empty() && selection_tail == cin.current().len() {
+                        let it = Cmd::predict_cmd(cin.current());
+                        if !it.clone().any(|(_, x)| x.is_empty()) {
+                            for (n, (_, s)) in it.enumerate() {
+                                d.draw_text_ex(&font, s, Vector2::new(selection_rec.x, selection_rec.y + font_size*n as f32), font_size, spacing, COLOR.alpha(0.5));
+                            }
+                        }
                     }
                     if display_cursor {
                         let cursor_rec = Rectangle::new(
