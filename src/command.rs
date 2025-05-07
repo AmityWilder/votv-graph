@@ -73,7 +73,7 @@ pub enum FromCmdError {
 impl std::fmt::Display for FromCmdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unknown(cmd) => write!(f, "The term '{cmd}' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again."),
+            Self::Unknown(cmd) => write!(f, "No such command `{cmd}`"),
         }
     }
 }
