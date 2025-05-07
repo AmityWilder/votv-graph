@@ -1,6 +1,6 @@
-use std::{num::NonZeroU32, path::Path};
+use std::{num::NonZeroU32, path::Path, str::FromStr};
 use raylib::prelude::*;
-use crate::{console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
+use crate::{console::{input::ConsoleIn, output::ConsoleOut, parse_color::RichColor}, console_log, graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, CommandData, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
 
 pub enum Tempo {
     Sync,
@@ -133,7 +133,10 @@ macro_rules! define_commands {
 define_commands!{
     pub enum Cmd {
         #[input("help")]
-        #[usage(case(args(), desc = "Display this information"))]
+        #[usage(
+            case(args(), desc = "Display this information"),
+            case(args("<COMMAND>"), desc = "Display help info about a particular command"),
+        )]
         Help,
 
         #[input("close")]
@@ -163,6 +166,33 @@ define_commands!{
             case(args(),             desc = "Print the name of the focused vertex"),
         )]
         Focus,
+
+        #[input("color.verts")]
+        #[usage(
+            case(args("#<HEXCODE>"),                            desc = "Set the color of vertices with a hexcode"),
+            case(args("rgb(<RED>, <GREEN>, <BLUE>)"),           desc = "Set the color of vertices with RGB"),
+            case(args("rgba(<RED>, <GREEN>, <BLUE>, <ALPHA>)"), desc = "Set the color of vertices with RGB and transparency"),
+            case(args("<NAME> [<OPACITY>%]"),                   desc = "Set the color of vertices to a named color"),
+        )]
+        ColorVerts,
+
+        #[input("color.edges")]
+        #[usage(
+            case(args("#<HEXCODE>"),                            desc = "Set the color of edges with a hexcode"),
+            case(args("rgb(<RED>, <GREEN>, <BLUE>)"),           desc = "Set the color of edges with RGB"),
+            case(args("rgba(<RED>, <GREEN>, <BLUE>, <ALPHA>)"), desc = "Set the color of edges with RGB and transparency"),
+            case(args("<NAME> [<OPACITY>%]"),                   desc = "Set the color of edges to a named color"),
+        )]
+        ColorEdges,
+
+        #[input("color.bg")]
+        #[usage(
+            case(args("#<HEXCODE>"),                            desc = "Set the color of the background with a hexcode"),
+            case(args("rgb(<RED>, <GREEN>, <BLUE>)"),           desc = "Set the color of the background with RGB"),
+            case(args("rgba(<RED>, <GREEN>, <BLUE>, <ALPHA>)"), desc = "Set the color of the background with RGB and transparency"),
+            case(args("<NAME> [<OPACITY>%]"),                   desc = "Set the color of the background to a named color"),
+        )]
+        ColorBackground,
 
         #[input("sv.route")]
         #[usage(
@@ -238,6 +268,7 @@ pub enum CmdError {
     ParseTempoTicksFailed(std::num::ParseIntError),
     ParseTempoMillisecondsFailed(std::num::ParseIntError),
     LoadGraphFailed(LoadGraphError),
+    FromCmdError(FromCmdError),
     IOError(std::io::Error),
 }
 impl std::fmt::Display for CmdError {
@@ -255,6 +286,7 @@ impl std::fmt::Display for CmdError {
             Self::ParseTempoTicksFailed(_) => f.write_str("could not parse ticks"),
             Self::ParseTempoMillisecondsFailed(_) => f.write_str("could not parse milliseconds"),
             Self::LoadGraphFailed(_) => f.write_str("could not load graph"),
+            Self::FromCmdError(_) => f.write_str("no such command exists"),
             Self::IOError(_) => f.write_str("filesystem IO error"),
         }
     }
@@ -275,6 +307,7 @@ impl std::error::Error for CmdError {
             | Self::ParseTempoMillisecondsFailed(e)
                 => Some(e),
 
+            Self::FromCmdError(e) => Some(e),
             Self::IOError(e) => Some(e),
         }
     }
@@ -285,15 +318,7 @@ impl From<std::io::Error> for CmdError {
     }
 }
 
-#[derive(Debug)]
-pub enum CmdMessage {
-    None,
-    Return(String),
-    RequestInteractiveTargets,
-    Exit,
-}
-
-pub type CmdResult = Result<CmdMessage, CmdError>;
+pub type CmdResult = Result<String, CmdError>;
 
 impl Cmd {
     fn parse(s: &str) -> Option<Result<(Cmd, std::str::SplitWhitespace<'_>), FromCmdError>> {
@@ -315,7 +340,7 @@ impl Cmd {
             if target == "reset" {
                 camera.position = CAMERA_POSITION_DEFAULT;
                 camera.target = Vector3::zero();
-                Ok(CmdMessage::None)
+                Ok(String::new())
             } else {
                 let vert = graph.verts().iter()
                     .find(|vert| (vert.id.eq_ignore_ascii_case(target) || vert.alias.eq_ignore_ascii_case(target)));
@@ -323,7 +348,7 @@ impl Cmd {
                 if let Some(vert) = vert {
                     camera.target = vert.pos;
                     camera.position = camera.target + Vector3::new(0.0, 400.0, 0.0);
-                    Ok(CmdMessage::None)
+                    Ok(String::new())
                 } else {
                     Err(CmdError::VertexDNE(target.to_string()))
                 }
@@ -339,7 +364,7 @@ impl Cmd {
                 console_log!(cout, Info, "no vertex is currently focused");
                 ""
             };
-            Ok(CmdMessage::Return(id.to_string()))
+            Ok(id.to_string())
         }
     }
 
@@ -381,7 +406,9 @@ impl Cmd {
         cin: &mut ConsoleIn,
         graph: &WeightedGraph,
         route: &mut Option<RouteGenerator>,
+        is_giving_interactive_targets: &mut bool,
         interactive_targets: Vec<VertexID>,
+
         args: impl Iterator<Item = &'args str>,
     ) -> CmdResult {
         let mut args = args.peekable();
@@ -391,7 +418,9 @@ impl Cmd {
                 console_log!(cout, Info, "click a target again to un-target it");
                 console_log!(cout, Info, "run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished");
                 cin.insert_over_selection("sv.route");
-                return Ok(CmdMessage::RequestInteractiveTargets);
+                *is_giving_interactive_targets = true;
+                cin.unfocus();
+                return Ok(String::new());
             }
             Some(_) => {
                 args
@@ -408,7 +437,7 @@ impl Cmd {
         }
         *route = Some(RouteGenerator::new(graph.verts().len(), start, target_iter));
         console_log!(cout, Info, "generating route");
-        Ok(CmdMessage::None)
+        Ok(String::new())
     }
 
     pub fn run_sv_route_add<'args>(
@@ -416,6 +445,7 @@ impl Cmd {
         cin: &mut ConsoleIn,
         graph: &WeightedGraph,
         route: &mut Option<RouteGenerator>,
+        is_giving_interactive_targets: &mut bool,
         interactive_targets: Vec<VertexID>,
         args: impl Iterator<Item = &'args str>,
     ) -> CmdResult {
@@ -427,7 +457,8 @@ impl Cmd {
                 console_log!(cout, Info, "click a target again to un-target it");
                 console_log!(cout, Info, "run the command `<color = #0096e6>sv.route.add</color>` (without arguments) when finished");
                 cin.insert_over_selection("sv.route.add");
-                return Ok(CmdMessage::RequestInteractiveTargets);
+                *is_giving_interactive_targets = true;
+                return Ok(String::new());
             }
             Some(_) => {
                 args
@@ -441,7 +472,7 @@ impl Cmd {
         }
         route.add_targets(cout, targets);
         console_log!(cout, Info, "extending route");
-        Ok(CmdMessage::None)
+        Ok(String::new())
     }
 
     pub fn run_sv_new<'args>(
@@ -462,7 +493,7 @@ impl Cmd {
         graph.add_vertex(id, alias.unwrap_or(id), pos);
         *route = None;
         console_log!(cout, Info, "created new vertex");
-        Ok(CmdMessage::None)
+        Ok(String::new())
     }
 
     pub fn run_sv_edge<'args>(
@@ -482,7 +513,7 @@ impl Cmd {
             *route = None;
             console_log!(cout, Info, "created an edge connecting vertices {a} and {b}");
         }
-        Ok(CmdMessage::None)
+        Ok(String::new())
     }
 
     pub fn run_tempo<'args>(
@@ -512,7 +543,7 @@ impl Cmd {
         } else {
             console_log!(cout, Info, "current tempo is {tempo}");
         }
-        Ok(CmdMessage::None)
+        Ok(String::new())
     }
 
     pub fn run_sv_load<'args>(
@@ -527,7 +558,7 @@ impl Cmd {
             *graph = WeightedGraph::load_from_memory(mem).map_err(|e| CmdError::LoadGraphFailed(e))?;
             *route = None;
             console_log!(cout, Info, "graph loaded from \"{path_str}\"");
-            Ok(CmdMessage::None)
+            Ok(String::new())
         } else {
             Err(CmdError::CheckUsage(Cmd::SvLoad))
         }
@@ -543,150 +574,167 @@ impl Cmd {
             let mem = WeightedGraph::save_to_memory(&graph);
             std::fs::write(path, mem)?;
             console_log!(cout, Info, "graph saved to \"{path_str}\"");
-            Ok(CmdMessage::None)
+            Ok(String::new())
         } else {
             Err(CmdError::CheckUsage(Cmd::SvLoad))
         }
     }
 
-    /// Returns true if the program should close
-    pub fn run(
+    fn run_once<'args>(
+        mut self,
+        mut args: std::iter::Peekable<impl Iterator<Item = &'args str>>,
         cout: &mut ConsoleOut,
         cin: &mut ConsoleIn,
-        graph: &mut WeightedGraph,
-        route: &mut Option<RouteGenerator>,
-        is_debugging: &mut bool,
-        is_giving_interactive_targets: &mut bool,
-        interactive_targets: &mut Vec<VertexID>,
-        camera: &mut Camera3D,
-        tempo: &mut Tempo,
-    ) -> bool {
+        data: &mut CommandData,
+    ) -> CmdResult {
+        let is_awaited = matches!(self, Cmd::Await);
+        while matches!(self, Cmd::Await) {
+            match Cmd::try_from_str(args.next().unwrap_or_default()) {
+                Ok(x) => self = x,
+                Err(e) => return Err(CmdError::FromCmdError(e)),
+            }
+        }
+        match self {
+            Cmd::Help => {
+                Cmd::run_help(cout);
+                Ok(String::new())
+            }
+            Cmd::Echo => {
+                let value = args.collect::<Vec<_>>().join(" ");
+                console_log!(cout, Info, "{value}");
+                Ok(value)
+            }
+            Cmd::Skip => {
+                if let Some(n) = args.next().and_then(|n| n.parse().ok()) {
+                    Ok(args.skip(n).collect::<Vec<&str>>().join(" "))
+                } else {
+                    Err(CmdError::CheckUsage(Cmd::Skip))
+                }
+            }
+            Cmd::Take => {
+                if let Some(n) = args.next().and_then(|n| n.parse().ok()) {
+                    Ok(args.take(n).collect::<Vec<&str>>().join(" "))
+                } else {
+                    Err(CmdError::CheckUsage(Cmd::Take))
+                }
+            }
+            Cmd::Await => unreachable!(),
+            Cmd::SvRouteList => {
+                if let Some(route) = &mut data.route {
+                    let list = route.result()
+                        .into_iter()
+                        .copied()
+                        .map(|id| data.graph.vert(id).id.as_str())
+                        .collect::<Vec<&str>>();
+
+                    console_log!(cout, Info, "targets: {}", list.join(", "));
+                    Ok(list.join(" "))
+                } else {
+                    console_log!(cout, Info, "no ongoing route");
+                    Ok(String::new())
+                }
+            }
+            Cmd::SvRoute | Cmd::SvRouteAdd => {
+                let result = match self {
+                    Cmd::SvRoute    => Cmd::run_sv_route    (cout, cin, &mut data.graph, &mut data.route, &mut data.is_giving_interactive_targets, std::mem::take(&mut data.interactive_targets), args),
+                    Cmd::SvRouteAdd => Cmd::run_sv_route_add(cout, cin, &mut data.graph, &mut data.route, &mut data.is_giving_interactive_targets, std::mem::take(&mut data.interactive_targets), args),
+                    _ => unreachable!(),
+                };
+                if result.is_ok() && data.is_giving_interactive_targets {
+                    Ok(String::new())
+                } else {
+                    data.is_giving_interactive_targets = false;
+                    if result.is_ok() && is_awaited {
+                        let route = data.route.as_mut().unwrap();
+                        loop {
+                            route.step(cout, &mut data.graph);
+                            if route.is_finished() {
+                                let s = route.result()
+                                    .into_iter()
+                                    .copied()
+                                    .map(|id| data.graph.vert(id).id.as_str())
+                                    .collect::<Vec<&str>>()
+                                    .join(" ");
+
+                                break Ok(s);
+                            }
+                        }
+                    } else {
+                        result
+                    }
+                }
+            }
+            Cmd::SvRouteClear => {
+                data.route = None;
+                console_log!(cout, Info, "route cleared");
+                Ok(String::new())
+            },
+            Cmd::SvNew => Cmd::run_sv_new(cout, &mut data.graph, &mut data.route, data.camera, args),
+            Cmd::SvEdge => Cmd::run_sv_edge(cout, &mut data.graph, &mut data.route, args),
+            Cmd::SvLoad => Cmd::run_sv_load(cout, &mut data.graph, &mut data.route, args),
+            Cmd::SvSave => Cmd::run_sv_save(cout, &mut data.graph, args),
+            Cmd::Tempo => Cmd::run_tempo(cout, &mut data.tempo, args),
+            Cmd::Dbg => {
+                data.is_debugging = !data.is_debugging;
+                console_log!(cout, Info, "debugging is now {}", if data.is_debugging { "on" } else { "off" });
+                Ok(String::new())
+            }
+            Cmd::Focus => Cmd::run_focus(cout, &mut data.graph, &mut data.camera, args),
+            Cmd::Cls => {
+                cout.clear_log();
+                Ok(String::new())
+            }
+            Cmd::Close => {
+                data.should_close = true;
+                Ok(String::new())
+            }
+            Cmd::ColorVerts | Cmd::ColorEdges | Cmd::ColorBackground => {
+                let color: Option<Color> = args.next()
+                    .and_then(|x| RichColor::from_str(x).ok())
+                    .and_then(|RichColor(color)|
+                        args.next()
+                            .map_or(
+                                Some(color),
+                                |opacity_str| opacity_str
+                                    .strip_suffix('%')
+                                    .and_then(|x| x.parse::<f32>().ok())
+                                    .map(|a| color.alpha(a*0.01))
+                            )
+                    );
+                if let Some(color) = color {
+                    *match self {
+                        Cmd::ColorVerts => &mut data.verts_color,
+                        Cmd::ColorEdges => &mut data.edges_color,
+                        Cmd::ColorBackground => &mut data.background_color,
+                        _ => unreachable!(),
+                    } = color;
+                    Ok(String::new())
+                } else {
+                    Err(CmdError::CheckUsage(self))
+                }
+            }
+        }
+    }
+
+    /// Returns true if the program should close
+    pub fn run(cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut CommandData) -> bool {
         if let Some(cmd_line) = cin.submit_cmd(cout).map(|s| s.to_string()) {
             cmd_line
                 .split('|')
-                .scan((false, String::new()), |(is_awaited, prev_ret), cmd_args| {
+                .scan(String::new(), |prev_ret, cmd_args| {
                     match Cmd::parse(cmd_args) {
-                        Some(Ok((mut cmd, args))) => {
-                            let result = {
-                                let mut args = args.chain(prev_ret.as_str().split_whitespace()).filter(|arg| !arg.is_empty());
-                                while matches!(cmd, Cmd::Await) {
-                                    *is_awaited = true;
-                                    match Cmd::try_from_str(args.next().unwrap_or_default()) {
-                                        Ok(x) => cmd = x,
-                                        Err(e) => {
-                                            console_log!(cout, Error, "{e}");
-                                            return None;
-                                        }
-                                    }
-                                }
-                                match cmd {
-                                    Cmd::Help => {
-                                        Cmd::run_help(cout);
-                                        Ok(CmdMessage::None)
-                                    }
-                                    Cmd::Echo => {
-                                        let value = args.collect::<Vec<_>>().join(" ");
-                                        console_log!(cout, Info, "{value}");
-                                        Ok(CmdMessage::Return(value))
-                                    }
-                                    Cmd::Skip => {
-                                        if let Some(n) = args.next().and_then(|n| n.parse().ok()) {
-                                            Ok(CmdMessage::Return(args.skip(n).collect::<Vec<&str>>().join(" ")))
-                                        } else {
-                                            Err(CmdError::CheckUsage(Cmd::Skip))
-                                        }
-                                    }
-                                    Cmd::Take => {
-                                        if let Some(n) = args.next().and_then(|n| n.parse().ok()) {
-                                            Ok(CmdMessage::Return(args.take(n).collect::<Vec<&str>>().join(" ")))
-                                        } else {
-                                            Err(CmdError::CheckUsage(Cmd::Take))
-                                        }
-                                    }
-                                    Cmd::Await => unreachable!(),
-                                    Cmd::SvRouteList => {
-                                        if let Some(route) = route {
-                                            let list = route.result()
-                                                .into_iter()
-                                                .copied()
-                                                .map(|id| graph.vert(id).id.as_str())
-                                                .collect::<Vec<&str>>();
+                        Some(Ok((cmd, args))) => {
+                            let result = cmd.run_once(
+                                args.chain(prev_ret.as_str().split_whitespace()).filter(|arg| !arg.is_empty()).peekable(),
+                                cout,
+                                cin,
+                                data,
+                            );
 
-                                            console_log!(cout, Info, "targets: {}", list.join(", "));
-                                            Ok(CmdMessage::Return(list.join(" ")))
-                                        } else {
-                                            console_log!(cout, Info, "no ongoing route");
-                                            Ok(CmdMessage::Return(String::new()))
-                                        }
-                                    }
-                                    Cmd::SvRoute | Cmd::SvRouteAdd => {
-                                        let result = match cmd {
-                                            Cmd::SvRoute    => Cmd::run_sv_route    (cout, cin, graph, route, std::mem::take(interactive_targets), args),
-                                            Cmd::SvRouteAdd => Cmd::run_sv_route_add(cout, cin, graph, route, std::mem::take(interactive_targets), args),
-                                            _ => unreachable!(),
-                                        };
-                                        if matches!(result, Ok(CmdMessage::RequestInteractiveTargets)) {
-                                            *is_giving_interactive_targets = true;
-                                            cin.unfocus();
-                                            Ok(CmdMessage::None)
-                                        } else {
-                                            *is_giving_interactive_targets = false;
-                                            if result.is_ok() && *is_awaited {
-                                                let route = route.as_mut().unwrap();
-                                                loop {
-                                                    route.step(cout, graph);
-                                                    if route.is_finished() {
-                                                        let s = route.result()
-                                                            .into_iter()
-                                                            .copied()
-                                                            .map(|id| graph.vert(id).id.as_str())
-                                                            .collect::<Vec<&str>>()
-                                                            .join(" ");
-
-                                                        break Ok(CmdMessage::Return(s));
-                                                    }
-                                                }
-                                            } else {
-                                                result
-                                            }
-                                        }
-                                    }
-                                    Cmd::SvRouteClear => {
-                                        *route = None;
-                                        console_log!(cout, Info, "route cleared");
-                                        Ok(CmdMessage::None)
-                                    },
-                                    Cmd::SvNew => Cmd::run_sv_new(cout, graph, route, *camera, args),
-                                    Cmd::SvEdge => Cmd::run_sv_edge(cout, graph, route, args),
-                                    Cmd::SvLoad => Cmd::run_sv_load(cout, graph, route, args),
-                                    Cmd::SvSave => Cmd::run_sv_save(cout, graph, args),
-                                    Cmd::Tempo => Cmd::run_tempo(cout, tempo, args),
-                                    Cmd::Dbg => {
-                                        *is_debugging = !*is_debugging;
-                                        console_log!(cout, Info, "debugging is now {}", if *is_debugging { "on" } else { "off" });
-                                        Ok(CmdMessage::None)
-                                    }
-                                    Cmd::Focus => Cmd::run_focus(cout, graph, camera, args),
-                                    Cmd::Cls => {
-                                        cout.clear_log();
-                                        Ok(CmdMessage::None)
-                                    }
-                                    Cmd::Close => {
-                                        Ok(CmdMessage::Exit)
-                                    }
-                                }
-                            };
-
-                            *is_awaited = false;
                             prev_ret.clear();
 
                             match result {
-                                Ok(msg) => match msg {
-                                    CmdMessage::Return(s) => prev_ret.push_str(&s),
-                                    CmdMessage::None => {}
-                                    CmdMessage::Exit => return Some(true),
-                                    CmdMessage::RequestInteractiveTargets => unreachable!(),
-                                }
+                                Ok(msg) => prev_ret.push_str(&msg),
                                 Err(e) => {
                                     use std::error::Error;
                                     use std::fmt::Write;

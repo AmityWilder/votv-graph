@@ -12,9 +12,9 @@ use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
 use command::{Cmd, Tempo};
-use graph::WeightedGraph;
+use graph::{VertexID, WeightedGraph};
 use raylib::prelude::*;
-use route::{VertexClass, Visit};
+use route::{RouteGenerator, VertexClass, Visit};
 
 mod serialization;
 mod console;
@@ -37,34 +37,54 @@ const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
 const SAFE_ZONE: f32 = 20.0;
 const UPSCALE: f32 = 2.0;
 
+/// All information that can be affected by commands
+pub struct CommandData {
+    graph: WeightedGraph,
+    route: Option<RouteGenerator>,
+    is_debugging: bool,
+    camera: Camera3D,
+    tempo: Tempo,
+    interactive_targets: Vec<VertexID>,
+    is_giving_interactive_targets: bool,
+    should_close: bool,
+    verts_color: Color,
+    edges_color: Color,
+    background_color: Color,
+}
+
 fn main() {
     let mut cin = ConsoleIn::new();
     let mut cout = ConsoleOut::new();
 
-    let mut is_debugging = false;
-
-    let mut graph = WeightedGraph::load_from_memory(include_str!("resources/votv.graph"))
-        .unwrap_or_else(|e| {
-            console_log!(cout, Error, "error loading hard-coded map: {e}");
-            WeightedGraph::new(Vec::new(), Vec::new())
-        });
-
-    let mut route = None;
-
-    let mut camera = Camera3D::perspective(
-        CAMERA_POSITION_DEFAULT,
-        Vector3::zero(),
-        Vector3::new(0.0, 0.0, -1.0),
-        45.0,
-    );
-
-    let mut tempo = Tempo::new();
+    let mut data = CommandData {
+        is_debugging: false,
+        graph: WeightedGraph::new(Vec::new(), Vec::new()),
+        route: None,
+        camera: Camera3D::perspective(
+            CAMERA_POSITION_DEFAULT,
+            Vector3::zero(),
+            Vector3::new(0.0, 0.0, -1.0),
+            45.0,
+        ),
+        tempo: Tempo::new(),
+        interactive_targets: Vec::new(),
+        is_giving_interactive_targets: false,
+        should_close: false,
+        verts_color: Color::new(255, 0, 0, 255),
+        edges_color: Color::new(255, 0, 0, 63),
+        background_color: Color::new(4, 0, 0, 255),
+    };
 
     let mut is_cursor_shown = false;
     let mut cursor_last_toggled = Instant::now();
 
-    let mut interactive_targets = Vec::new();
-    let mut is_giving_interactive_targets = false;
+    {
+        let default_graph = WeightedGraph::load_from_memory(include_str!("resources/votv.graph"));
+        match default_graph {
+            Ok(g) => data.graph = g,
+            Err(e) => console_log!(cout, Error, "error loading hard-coded map: {e}"),
+        }
+    }
 
     let mut mouse_tracking;
 
@@ -103,15 +123,15 @@ fn main() {
             shader.set_shader_value(shader_render_height_loc, height as f32);
         }
 
-        let hovered_vert = graph.verts_iter()
-            .map(|(v, vert)| (v, get_ray_collision_sphere(rl.get_screen_to_world_ray(rl.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS)))
+        let hovered_vert = data.graph.verts_iter()
+            .map(|(v, vert)| (v, get_ray_collision_sphere(rl.get_screen_to_world_ray(rl.get_mouse_position(), data.camera), vert.pos, VERTEX_RADIUS)))
             .filter(|(_, c)| c.hit)
             .min_by(|(_, c1), (_, c2)| c1.distance.partial_cmp(&c2.distance).expect("vertices should not have `NaN` distance"))
             .map(|(v, _)| v);
 
         let mouse_snapped =
             if let &Some(v) = &hovered_vert {
-                rl.get_world_to_screen(graph.vert(v).pos, camera)
+                rl.get_world_to_screen(data.graph.vert(v).pos, data.camera)
             } else {
                 rl.get_mouse_position()
             };
@@ -125,18 +145,8 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
             if cin.is_focused() {
                 // finish giving command
-                let should_close = Cmd::run(
-                    &mut cout,
-                    &mut cin,
-                    &mut graph,
-                    &mut route,
-                    &mut is_debugging,
-                    &mut is_giving_interactive_targets,
-                    &mut interactive_targets,
-                    &mut camera,
-                    &mut tempo,
-                );
-                if should_close {
+                Cmd::run(&mut cout, &mut cin, &mut data);
+                if data.should_close {
                     break 'window;
                 }
             } else {
@@ -159,7 +169,7 @@ fn main() {
                 cursor_last_toggled = Instant::now();
             }
         } else {
-            let speed = 6.0*camera.position.distance_to(camera.target)/CAMERA_POSITION_DEFAULT.y;
+            let speed = 6.0*data.camera.position.distance_to(data.camera.target)/CAMERA_POSITION_DEFAULT.y;
             let north = (rl.is_key_down(KeyboardKey::KEY_W) as i8 - rl.is_key_down(KeyboardKey::KEY_S) as i8) as f32;
             let east  = (rl.is_key_down(KeyboardKey::KEY_D) as i8 - rl.is_key_down(KeyboardKey::KEY_A) as i8) as f32;
             let up    = (rl.is_key_down(KeyboardKey::KEY_Q) as i8 - rl.is_key_down(KeyboardKey::KEY_E) as i8) as f32;
@@ -167,27 +177,27 @@ fn main() {
             let yaw   = (rl.is_key_down(KeyboardKey::KEY_X) as i8 - rl.is_key_down(KeyboardKey::KEY_Z) as i8) as f32;
             let pan = Vector3::new(east, 0.0, -north) * speed;
             let zoom = Vector3::new(yaw, up, -pitch) * speed;
-            camera.position += pan + zoom;
-            camera.target += pan;
+            data.camera.position += pan + zoom;
+            data.camera.target += pan;
         }
 
-        if is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
+        if data.is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
             if let Some(v) = hovered_vert {
-                if let Some(p) = interactive_targets.iter().position(|x| x == &v) {
-                    console_log!(cout, Info, "removing vertex {} from route", graph.vert(v).id);
-                    interactive_targets.remove(p);
+                if let Some(p) = data.interactive_targets.iter().position(|x| x == &v) {
+                    console_log!(cout, Info, "removing vertex {} from route", data.graph.vert(v).id);
+                    data.interactive_targets.remove(p);
                 } else {
-                    console_log!(cout, Info, "adding vertex {} to route", graph.vert(v).id);
-                    interactive_targets.push(v);
+                    console_log!(cout, Info, "adding vertex {} to route", data.graph.vert(v).id);
+                    data.interactive_targets.push(v);
                 }
             }
         }
 
-        if let Some(route) = &mut route {
-            match &tempo {
+        if let Some(route) = &mut data.route {
+            match &data.tempo {
                 Tempo::Sync => {
                     if !route.is_finished() {
-                        route.step(&mut cout, &graph);
+                        route.step(&mut cout, &data.graph);
                     }
                 }
 
@@ -195,13 +205,13 @@ fn main() {
                     let target_duration = Duration::from_secs_f32(0.5/rl.get_fps() as f32);
                     let start = Instant::now();
                     while !route.is_finished() && start.elapsed() < target_duration {
-                        route.step(&mut cout, &graph);
+                        route.step(&mut cout, &data.graph);
                     }
                 }
 
                 Tempo::Instant => {
                     while !route.is_finished() {
-                        route.step(&mut cout, &graph);
+                        route.step(&mut cout, &data.graph);
                     }
                 }
 
@@ -212,38 +222,38 @@ fn main() {
                     let ticks = ticks.get() as u128*ms_elapsed/(NonZeroU128::from(*ms));
                     for _ in 0..ticks {
                         if route.is_finished() { break; }
-                        route.step(&mut cout, &graph);
+                        route.step(&mut cout, &data.graph);
                     }
                 }
             }
         }
 
-        let route = &route;
+        let route = &data.route;
 
         {
             let mut d = rl.begin_texture_mode(&thread, &mut framebuffer);
-            d.clear_background(Color::new(8, 0, 0, 255));
+            d.clear_background(data.background_color);
 
             {
                 const SCALE_FACTOR: f32 = 1.0/(10.0*UPSCALE);
                 let mut d = d.begin_mode3D({
-                    let mut camera = camera;
+                    let mut camera = data.camera;
                     camera.target *= SCALE_FACTOR;
                     camera.position *= SCALE_FACTOR;
                     camera
                 });
 
-                for edge in graph.edges() {
+                for edge in data.graph.edges() {
                     let [i, j] = edge.adj;
-                    let p0 = graph.vert(i).pos;
-                    let p1 = graph.vert(j).pos;
-                    d.draw_capsule(p0*SCALE_FACTOR, p1*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::RED.alpha(0.25));
+                    let p0 = data.graph.vert(i).pos;
+                    let p1 = data.graph.vert(j).pos;
+                    d.draw_capsule(p0*SCALE_FACTOR, p1*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, data.edges_color);
                 }
 
-                for (v, vert) in graph.verts_iter() {
-                    let distance_from_target = vert.pos - camera.target;
-                    let mut color = route.as_ref().and_then(|route| route.classify(&graph, v)).map_or(
-                        Color::RED,
+                for (v, vert) in data.graph.verts_iter() {
+                    let distance_from_target = vert.pos - data.camera.target;
+                    let mut color = route.as_ref().and_then(|route| route.classify(&data.graph, v)).map_or(
+                        data.verts_color,
                         |c| match c {
                             VertexClass::Current => Color::SKYBLUE,
                             VertexClass::Adjacent => Color::ORANGE,
@@ -253,12 +263,12 @@ fn main() {
                         }
                     );
 
-                    if is_giving_interactive_targets {
-                        let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS).hit;
+                    if data.is_giving_interactive_targets {
+                        let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), data.camera), vert.pos, VERTEX_RADIUS).hit;
                         if is_hovered {
                             color = color.brightness(0.45);
                         }
-                        let is_targeted = interactive_targets.contains(&v);
+                        let is_targeted = data.interactive_targets.contains(&v);
                         if is_targeted {
                             color = color.brightness(0.35);
                         }
@@ -273,7 +283,7 @@ fn main() {
                     d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, 10, 10, color);
                     if let Some(route) = &route {
                         if let Some(Visit { parent: Some(p), .. }) = route.get_visit(v) {
-                            d.draw_capsule(graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
+                            d.draw_capsule(data.graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
                         }
                     }
                 }
@@ -281,25 +291,25 @@ fn main() {
                 if let Some(route) = &route {
                     for pair in route.result().windows(2) {
                         let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
-                        d.draw_capsule(graph.vert(*a).pos*SCALE_FACTOR, graph.vert(*b).pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                        d.draw_capsule(data.graph.vert(*a).pos*SCALE_FACTOR, data.graph.vert(*b).pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
                     }
                 }
 
-                d.draw_capsule((camera.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (camera.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
-                d.draw_capsule((camera.target + Vector3::new( 0.0, 0.0, -5.0))*SCALE_FACTOR, (camera.target + Vector3::new(0.0, 0.0, 5.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                d.draw_capsule((data.camera.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (data.camera.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                d.draw_capsule((data.camera.target + Vector3::new( 0.0, 0.0, -5.0))*SCALE_FACTOR, (data.camera.target + Vector3::new(0.0, 0.0, 5.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
             }
 
             d.draw_rectangle_rec(Rectangle::new((mouse_tracking.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_screen_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
             d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_tracking.y - 1.5)*UPSCALE, d.get_screen_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
 
-            for (v, vert) in graph.verts_iter() {
-                let pos = d.get_world_to_screen(vert.pos, camera);
+            for (v, vert) in data.graph.verts_iter() {
+                let pos = d.get_world_to_screen(vert.pos, data.camera);
                 let text = vert.alias.as_str();
                 let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
                 d.draw_text_ex(&font, text, (pos - rvec2(text_size.x*0.5, font.baseSize/2))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
                 if let Some(route) = &route {
                     if let Some(Visit { distance, parent }) = route.get_visit(v) {
-                        let parent_text = parent.map_or("-", |p| &graph.vert(p).alias);
+                        let parent_text = parent.map_or("-", |p| &data.graph.vert(p).alias);
                         let text = format!("{} ({parent_text})", distance.ceil());
                         d.draw_text_ex(&font, &text, (pos + rvec2(text_size.x*0.5 + 3.0, 3))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
                     }
@@ -308,7 +318,7 @@ fn main() {
         }
 
         let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::new(4, 0, 0, 255));
+        d.clear_background(data.background_color);
 
         // Render
         {
@@ -346,7 +356,7 @@ fn main() {
 
             d.draw_text_ex(
                 &font,
-                &format!("x:{}/y:{}", camera.target.x, camera.target.z),
+                &format!("x:{}/y:{}", data.camera.target.x, data.camera.target.z),
                 Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize) as f32 - SAFE_ZONE),
                 font.baseSize as f32,
                 0.0,
@@ -373,7 +383,7 @@ fn main() {
                             .lines()
                             .enumerate()
                         )
-                        .chain(is_debugging
+                        .chain(data.is_debugging
                             .then(|| c_out.dbg_history()
                                 .flat_map(|msg| msg
                                     .lines()
