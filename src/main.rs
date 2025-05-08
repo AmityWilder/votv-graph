@@ -4,6 +4,10 @@
     str_split_remainder,
     assert_matches,
     iter_next_chunk,
+    never_type,
+    type_alias_impl_trait,
+    impl_trait_in_assoc_type,
+    associated_type_defaults,
 )]
 
 use std::num::NonZeroU128;
@@ -11,7 +15,7 @@ use std::time::{Duration, Instant};
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{Cmd, Tempo};
+use command::{ProgramData, Tempo};
 use graph::{VertexID, WeightedGraph};
 use raylib::prelude::*;
 use route::{RouteGenerator, VertexClass, Visit};
@@ -37,26 +41,11 @@ const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
 const SAFE_ZONE: f32 = 20.0;
 const UPSCALE: f32 = 2.0;
 
-/// All information that can be affected by commands
-pub struct CommandData {
-    graph: WeightedGraph,
-    route: Option<RouteGenerator>,
-    is_debugging: bool,
-    camera: Camera3D,
-    tempo: Tempo,
-    interactive_targets: Vec<VertexID>,
-    is_giving_interactive_targets: bool,
-    should_close: bool,
-    verts_color: Color,
-    edges_color: Color,
-    background_color: Color,
-}
-
 fn main() {
     let mut cin = ConsoleIn::new();
     let mut cout = ConsoleOut::new();
 
-    let mut data = CommandData {
+    let mut data = ProgramData {
         is_debugging: false,
         graph: WeightedGraph::new(Vec::new(), Vec::new()),
         route: None,
@@ -145,7 +134,7 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
             if cin.is_focused() {
                 // finish giving command
-                Cmd::run(&mut cout, &mut cin, &mut data);
+                Command::submit(&mut cout, &mut cin, &mut data);
                 if data.should_close {
                     break 'window;
                 }
@@ -463,12 +452,12 @@ fn main() {
                     if selection_range.len() > 0 {
                         d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.25));
                     } else if !cin.current().is_empty() && selection_tail == cin.current().len() {
-                        let it = Cmd::predict_cmd(cin.current());
-                        if !it.clone().any(|(_, x)| x.is_empty()) {
-                            for (n, (_, s)) in it.enumerate() {
-                                d.draw_text_ex(&font, s, Vector2::new(selection_rec.x, selection_rec.y + font_size*n as f32), font_size, spacing, COLOR.alpha(0.5));
-                            }
-                        }
+                        // let it = Cmd::predict_cmd(cin.current());
+                        // if !it.clone().any(|(_, x)| x.is_empty()) {
+                        //     for (n, (_, s)) in it.enumerate() {
+                        //         d.draw_text_ex(&font, s, Vector2::new(selection_rec.x, selection_rec.y + font_size*n as f32), font_size, spacing, COLOR.alpha(0.5));
+                        //     }
+                        // }
                     }
                     if display_cursor {
                         let cursor_rec = Rectangle::new(
