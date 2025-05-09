@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::VecDeque, num::NonZeroU32, str::FromStr};
+use std::{borrow::Cow, collections::VecDeque, marker::PhantomData, num::NonZeroU32, str::FromStr};
 // use exec::{CmdError, CmdResult};
 use raylib::prelude::* ;
 use snippet::Snippet;
@@ -58,8 +58,81 @@ pub struct ProgramData {
     pub background_color: Color,
 }
 
-#[derive(Debug)]
-pub enum Cmd {
+pub trait Arguments<'a>: Sized + 'a {
+    type Err: std::error::Error;
+
+    fn parse(
+        data: &ProgramData, // for vertexID lookup
+        s: &'a str, // actual argument text
+    ) -> Result<Self, Self::Err>;
+}
+
+impl<'a> Arguments<'a> for () {
+    type Err = !; // "too many arguments"
+
+    #[inline]
+    fn parse(_data: &ProgramData, s: &'a str) -> Result<Self, Self::Err> {
+        if s.is_empty() { Ok(()) } else { Err(todo!()) }
+    }
+}
+
+pub trait Returns<'a>: Sized + 'a {
+    fn to_args(self) -> Cow<'a, str>;
+    fn print(self, cout: &mut ConsoleOut);
+}
+
+impl<'a> Returns<'a> for () {
+    #[inline]
+    fn to_args(self) -> Cow<'a, str> {
+        Cow::Borrowed("")
+    }
+
+    #[inline]
+    fn print(self, cout: &mut ConsoleOut) {}
+}
+
+pub trait Usage {
+    type Args<'a>: Arguments<'a>;
+    type Rets<'a>: Returns<'a>;
+    type Err: std::error::Error;
+
+    fn run<'a>(
+        &mut self,
+        cout: &mut ConsoleOut,
+        cin: &mut ConsoleIn,
+        data: &mut ProgramData,
+        args: Self::Args<'a>,
+    ) -> Result<Self::Rets<'a>, Self::Err>;
+}
+
+pub trait Command: Sized {
+    type Args<'a>: Arguments<'a>;
+    type Rets<'a>: Returns<'a>;
+    type Err: std::error::Error;
+
+    const INPUT: &str;
+
+    fn run<'a>(
+        self,
+        cout: &mut ConsoleOut,
+        cin: &mut ConsoleIn,
+        data: &mut ProgramData,
+        args: &str,
+    ) -> Result<Self::Rets<'a>, Self::Err>;
+}
+
+macro_rules! define_commands {
+    ($($Variant:ident),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Cmd { $($Variant),+ }
+
+        impl Cmd {
+            pub const LIST: [Self; [$(Self::$Variant),+].len()] = [$(Self::$Variant),+];
+        }
+    };
+}
+
+define_commands!{
     Help,
     Close,
     Cls,
@@ -82,9 +155,326 @@ pub enum Cmd {
     Take,
 }
 
-impl Cmd {
-
+#[derive(Debug)]
+pub enum FromCmdError {
+    Unknown(String),
 }
+impl std::fmt::Display for FromCmdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown(cmd) => write!(f, "No such command `{cmd}`"),
+        }
+    }
+}
+impl std::error::Error for FromCmdError {}
+
+impl std::str::FromStr for Cmd {
+    type Err = FromCmdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::LIST.into_iter()
+            .find(|cmd| s == cmd.info().input)
+            .ok_or_else(|| FromCmdError::Unknown(s.to_string()))
+    }
+}
+
+
+impl Cmd {
+    pub const fn input(self) -> &str {
+        match self {
+            Cmd::Help            => help            ::Help           ::INPUT,
+            Cmd::Close           => close           ::Close          ::INPUT,
+            Cmd::Cls             => cls             ::Cls            ::INPUT,
+            Cmd::Echo            => echo            ::Echo           ::INPUT,
+            Cmd::Dbg             => dbg             ::Dbg            ::INPUT,
+            Cmd::Focus           => focus           ::Focus          ::INPUT,
+            Cmd::ColorVerts      => color_verts     ::ColorVerts     ::INPUT,
+            Cmd::ColorEdges      => color_edges     ::ColorEdges     ::INPUT,
+            Cmd::ColorBackground => color_background::ColorBackground::INPUT,
+            Cmd::SvRoute         => sv_route        ::SvRoute        ::INPUT,
+            Cmd::SvRouteAdd      => sv_route_add    ::SvRouteAdd     ::INPUT,
+            Cmd::SvRouteList     => sv_route_list   ::SvRouteList    ::INPUT,
+            Cmd::SvRouteClear    => sv_route_clear  ::SvRouteClear   ::INPUT,
+            Cmd::SvNew           => sv_new          ::SvNew          ::INPUT,
+            Cmd::SvEdge          => sv_edge         ::SvEdge         ::INPUT,
+            Cmd::SvLoad          => sv_load         ::SvLoad         ::INPUT,
+            Cmd::SvSave          => sv_save         ::SvSave         ::INPUT,
+            Cmd::Tempo           => tempo           ::Tempo          ::INPUT,
+            Cmd::Skip            => skip            ::Skip           ::INPUT,
+            Cmd::Take            => take            ::Take           ::INPUT,
+        }
+    }
+
+    pub fn run<'a>(
+        self,
+        cout: &mut ConsoleOut,
+        cin: &mut ConsoleIn,
+        data: &mut ProgramData,
+        args: &'a str,
+    ) -> Result<(), ()> {
+        match self {
+            Cmd::Help            => help            ::Help           .run(cout, cin, data, args),
+            Cmd::Close           => close           ::Close          .run(cout, cin, data, args),
+            Cmd::Cls             => cls             ::Cls            .run(cout, cin, data, args),
+            Cmd::Echo            => echo            ::Echo           .run(cout, cin, data, args),
+            Cmd::Dbg             => dbg             ::Dbg            .run(cout, cin, data, args),
+            Cmd::Focus           => focus           ::Focus          .run(cout, cin, data, args),
+            Cmd::ColorVerts      => color_verts     ::ColorVerts     .run(cout, cin, data, args),
+            Cmd::ColorEdges      => color_edges     ::ColorEdges     .run(cout, cin, data, args),
+            Cmd::ColorBackground => color_background::ColorBackground.run(cout, cin, data, args),
+            Cmd::SvRoute         => sv_route        ::SvRoute        .run(cout, cin, data, args),
+            Cmd::SvRouteAdd      => sv_route_add    ::SvRouteAdd     .run(cout, cin, data, args),
+            Cmd::SvRouteList     => sv_route_list   ::SvRouteList    .run(cout, cin, data, args),
+            Cmd::SvRouteClear    => sv_route_clear  ::SvRouteClear   .run(cout, cin, data, args),
+            Cmd::SvNew           => sv_new          ::SvNew          .run(cout, cin, data, args),
+            Cmd::SvEdge          => sv_edge         ::SvEdge         .run(cout, cin, data, args),
+            Cmd::SvLoad          => sv_load         ::SvLoad         .run(cout, cin, data, args),
+            Cmd::SvSave          => sv_save         ::SvSave         .run(cout, cin, data, args),
+            Cmd::Tempo           => tempo           ::Tempo          .run(cout, cin, data, args),
+            Cmd::Skip            => skip            ::Skip           .run(cout, cin, data, args),
+            Cmd::Take            => take            ::Take           .run(cout, cin, data, args),
+        }
+    }
+}
+
+mod help {
+    use super::*;
+
+    pub enum Args {
+        All,
+        One(one::Args),
+    }
+
+    pub struct Help;
+
+    impl Command for Help {
+        type Args<'a> = Args;
+        type Rets<'a> = ();
+        type Err = !;
+
+        const INPUT: &str;
+
+        fn run<'a>(
+            self,
+            cout: &mut ConsoleOut,
+            cin: &mut ConsoleIn,
+            data: &mut ProgramData,
+            args: &str,
+        ) -> Result<Self::Rets<'a>, Self::Err> {
+            todo!()
+        }
+    }
+
+    mod all {
+        use super::super::*;
+
+        pub struct All;
+
+        impl Usage for All {
+            type Args<'a> = ();
+            type Rets<'a> = ();
+            type Err = !;
+
+            fn run<'a>(
+                &mut self,
+                cout: &mut ConsoleOut,
+                cin: &mut ConsoleIn,
+                data: &mut ProgramData,
+                args: Self::Args<'a>,
+            ) -> Result<Self::Rets<'a>, Self::Err> {
+                todo!()
+            }
+        }
+    }
+
+    mod one {
+        use crate::command::{Usage, Arguments, Cmd};
+
+        pub struct Args { cmd: Cmd }
+
+        impl<'a> Arguments<'a> for Args {
+            type Err = !; // todo
+
+            fn parse(
+                _data: &crate::command::ProgramData, // for vertexID lookup
+                s: &'a str, // actual argument text
+            ) -> Result<Self, Self::Err> {
+                Cmd::parse(s)
+            }
+        }
+
+        pub struct One;
+
+        impl Usage for One {
+            type Args<'a> = ();
+            type Rets<'a> = ();
+            type Err = !;
+
+            fn run<'a>(
+                &mut self,
+                cout: &mut ConsoleOut,
+                cin: &mut ConsoleIn,
+                data: &mut ProgramData,
+                args: Self::Args<'a>,
+            ) -> Result<Self::Rets<'a>, Self::Err> {
+                todo!()
+            }
+        }
+    }
+}
+
+mod close {
+    use super::*;
+
+    pub struct Close;
+
+    impl Command for Close {}
+}
+
+mod cls {
+    use super::*;
+
+    pub struct Cls;
+
+    impl Command for Cls {}
+}
+
+mod echo {
+    use super::*;
+
+    pub struct Echo;
+
+    impl Command for Echo {}
+}
+
+mod dbg {
+    use super::*;
+
+    pub struct Dbg;
+
+    impl Command for Dbg {}
+}
+
+mod focus {
+    use super::*;
+
+    pub struct Focus;
+
+    impl Command for Focus {}
+}
+
+mod color_verts {
+    use super::*;
+
+    pub struct ColorVerts;
+
+    impl Command for ColorVerts {}
+}
+
+mod color_edges {
+    use super::*;
+
+    pub struct ColorEdges;
+
+    impl Command for ColorEdges {}
+}
+
+mod color_background {
+    use super::*;
+
+    pub struct ColorBackground;
+
+    impl Command for ColorBackground {}
+}
+
+mod sv_route {
+    use super::*;
+
+    pub struct SvRoute;
+
+    impl Command for SvRoute {}
+}
+
+mod sv_route_add {
+    use super::*;
+
+    pub struct SvRouteAdd;
+
+    impl Command for SvRouteAdd {}
+}
+
+mod sv_route_list {
+    use super::*;
+
+    pub struct SvRouteList;
+
+    impl Command for SvRouteList {}
+}
+
+mod sv_route_clear {
+    use super::*;
+
+    pub struct SvRouteClear;
+
+    impl Command for SvRouteClear {}
+}
+
+mod sv_new {
+    use super::*;
+
+    pub struct SvNew;
+
+    impl Command for SvNew {}
+}
+
+mod sv_edge {
+    use super::*;
+
+    pub struct SvEdge;
+
+    impl Command for SvEdge {}
+}
+
+mod sv_load {
+    use super::*;
+
+    pub struct SvLoad;
+
+    impl Command for SvLoad {}
+}
+
+mod sv_save {
+    use super::*;
+
+    pub struct SvSave;
+
+    impl Command for SvSave {}
+}
+
+mod tempo {
+    use super::*;
+
+    pub struct Tempo;
+
+    impl Command for Tempo {}
+}
+
+mod skip {
+    use super::*;
+
+    pub struct Skip;
+
+    impl Command for Skip {}
+}
+
+mod take {
+    use super::*;
+
+    pub struct Take;
+
+    impl Command for Take {}
+}
+
 
 // pub enum ArgValue<'a> {
 //     Text(&'a str),
