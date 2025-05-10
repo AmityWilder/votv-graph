@@ -724,7 +724,7 @@ fn run_sv_route_interactive(cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &m
 }
 
 fn run_sv_route_add_immediate(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_sv_route_add_interactive(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
@@ -737,31 +737,31 @@ fn run_sv_route_add_interactive(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, da
 }
 
 fn run_sv_route_list(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_sv_route_clear(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_sv_new(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_sv_edge(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_sv_load(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_sv_save(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_tempo(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    todo!()
+    Err(CmdError::Todo)
 }
 
 fn run_skip(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
@@ -797,6 +797,7 @@ pub enum CmdError {
     LoadGraph(LoadGraphError),
     NoSuchCmd(String),
     IOError(std::io::Error),
+    Todo,
 }
 
 impl std::fmt::Display for CmdError {
@@ -814,6 +815,7 @@ impl std::fmt::Display for CmdError {
             Self::LoadGraph(_) => f.write_str("could not load graph"),
             Self::NoSuchCmd(cmd) => write!(f, "no such command `{cmd}`"),
             Self::IOError(_) => f.write_str("filesystem IO error"),
+            Self::Todo => f.write_str("not yet implemented"),
         }
     }
 }
@@ -825,6 +827,7 @@ impl std::error::Error for CmdError {
             | Self::VertexDNE(_)
             | Self::NoExistingRoute
             | Self::NoSuchCmd(_)
+            | Self::Todo
                 => None,
 
             Self::ParseCoords(e) => Some(e),
