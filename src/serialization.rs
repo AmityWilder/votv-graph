@@ -226,7 +226,7 @@ fn find_vert<'a, 'src: 'a>(
             .map_err(|e| LoadGraphError::usize_to_vertex_id(line, s, code, e))
 }
 
-fn pos_comp<'a, 'src: 'a>(
+fn pos_component<'a, 'src: 'a>(
     line: usize,
     code: &'src str,
     iter: &mut std::str::Split<'a, char>,
@@ -344,9 +344,9 @@ fn parse_vert<'a, 'b: 'a, 'src: 'b>(
     let (id, alias) = (id.to_string(), alias.to_string());
 
     let mut pos_iter = pos_str.split(',');
-    let x = pos_comp(line, code, &mut pos_iter)?;
-    let y = pos_comp(line, code, &mut pos_iter)?;
-    let z = pos_comp(line, code, &mut pos_iter)?;
+    let x = pos_component(line, code, &mut pos_iter)?;
+    let y = pos_component(line, code, &mut pos_iter)?;
+    let z = pos_component(line, code, &mut pos_iter)?;
 
     if let Some(unexpected) = pos_iter.next() {
         return Err(LoadGraphError::unexpected(line, unexpected, code));

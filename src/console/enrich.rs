@@ -1,5 +1,5 @@
 use raylib::prelude::*;
-use super::parse_color::RichColor;
+use crate::types::RichColor;
 
 pub trait EnrichEx {
     fn enrich(&self, root_color: Color, initial: &str) -> Enrich<'_>;

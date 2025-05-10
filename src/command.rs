@@ -1,47 +1,11 @@
-use std::{borrow::Cow, collections::VecDeque, marker::PhantomData, num::NonZeroU32, str::FromStr};
-// use exec::{CmdError, CmdResult};
-use raylib::prelude::* ;
-use snippet::Snippet;
-use crate::{console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator};
+use std::str::FromStr;
+use raylib::prelude::*;
+// use snippet::Snippet;
+use crate::{console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
 
 pub mod snippet;
 // pub mod exec;
-mod cmd;
-
-pub enum Tempo {
-    Sync,
-    Sprint,
-    Instant,
-    Paused,
-    Exact {
-        ticks: NonZeroU32,
-        ms: NonZeroU32,
-    },
-}
-impl Default for Tempo {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-impl Tempo {
-    pub const fn new() -> Self {
-        Self::Exact {
-            ticks: unsafe { NonZeroU32::new_unchecked(1) },
-            ms: unsafe { NonZeroU32::new_unchecked(1) },
-        }
-    }
-}
-impl std::fmt::Display for Tempo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Tempo::Sync => f.write_str("FPS sync"),
-            Tempo::Sprint => f.write_str("max responsive"),
-            Tempo::Instant => f.write_str("run in one frame"),
-            Tempo::Paused => f.write_str("paused"),
-            Tempo::Exact { ticks, ms } => write!(f, "{ticks} steps every {ms}ms"),
-        }
-    }
-}
+// mod cmd;
 
 /// All information that can be affected by commands
 pub struct ProgramData {
@@ -58,423 +22,881 @@ pub struct ProgramData {
     pub background_color: Color,
 }
 
-pub trait Arguments<'a>: Sized + 'a {
-    type Err: std::error::Error;
-
-    fn parse(
-        data: &ProgramData, // for vertexID lookup
-        s: &'a str, // actual argument text
-    ) -> Result<Self, Self::Err>;
+pub struct CmdReturn {
+    rets: Vec<String>,
+    disp: Option<Box<dyn FnOnce(&mut ConsoleOut, &ProgramData, Vec<String>)>>,
 }
 
-impl<'a> Arguments<'a> for () {
-    type Err = !; // "too many arguments"
-
-    #[inline]
-    fn parse(_data: &ProgramData, s: &'a str) -> Result<Self, Self::Err> {
-        if s.is_empty() { Ok(()) } else { Err(todo!()) }
-    }
-}
-
-pub trait Returns<'a>: Sized + 'a {
-    fn to_args(self) -> Cow<'a, str>;
-    fn print(self, cout: &mut ConsoleOut);
-}
-
-impl<'a> Returns<'a> for () {
-    #[inline]
-    fn to_args(self) -> Cow<'a, str> {
-        Cow::Borrowed("")
+impl CmdReturn {
+    const fn void() -> Self {
+        Self { rets: Vec::new(), disp: None }
     }
 
-    #[inline]
-    fn print(self, cout: &mut ConsoleOut) {}
-}
+    const fn pure(rets: Vec<String>) -> Self {
+        Self { rets, disp: None }
+    }
 
-pub trait Usage {
-    type Args<'a>: Arguments<'a>;
-    type Rets<'a>: Returns<'a>;
-    type Err: std::error::Error;
+    fn disp(disp: impl FnOnce(&mut ConsoleOut, &ProgramData) + 'static) -> Self {
+        Self { rets: Vec::new(), disp: Some(Box::new(|cout, data, _| disp(cout, data))) }
+    }
 
-    fn run<'a>(
-        &mut self,
-        cout: &mut ConsoleOut,
-        cin: &mut ConsoleIn,
-        data: &mut ProgramData,
-        args: Self::Args<'a>,
-    ) -> Result<Self::Rets<'a>, Self::Err>;
-}
+    fn new(rets: Vec<String>, disp: impl FnOnce(&mut ConsoleOut, &ProgramData, Vec<String>) + 'static) -> Self {
+        Self { rets, disp: Some(Box::new(disp)) }
+    }
 
-pub trait Command: Sized {
-    type Args<'a>: Arguments<'a>;
-    type Rets<'a>: Returns<'a>;
-    type Err: std::error::Error;
+    pub fn get(self) -> Vec<String> {
+        self.rets
+    }
 
-    const INPUT: &str;
-
-    fn run<'a>(
-        self,
-        cout: &mut ConsoleOut,
-        cin: &mut ConsoleIn,
-        data: &mut ProgramData,
-        args: &str,
-    ) -> Result<Self::Rets<'a>, Self::Err>;
+    pub fn print(self, cout: &mut ConsoleOut, data: &ProgramData) {
+        if let Some(f) = self.disp {
+            f(cout, data, self.rets);
+        }
+    }
 }
 
 macro_rules! define_commands {
-    ($($Variant:ident),+ $(,)?) => {
+    (
+        $(
+            #[input = $input:literal]
+            #[help = $help:literal]
+            $(#[$meta:meta])*
+            $Command:ident {
+                $(
+                    #[template = $template:literal]
+                    #[help = $usage_help:literal]
+                    $(#[$usage_meta:meta])*
+                    $Usage:ident($def:expr)
+                ),+ $(,)?
+            }
+        ),+ $(,)?
+    ) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub enum Cmd { $($Variant),+ }
+        pub enum Cmd {
+            $($Command),*
+        }
+
+        impl FromStr for Cmd {
+            type Err = CmdError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $($input => Ok(Self::$Command),)+
+                    _ => Err(CmdError::NoSuchCmd(s.to_string())),
+                }
+            }
+        }
 
         impl Cmd {
-            pub const LIST: [Self; [$(Self::$Variant),+].len()] = [$(Self::$Variant),+];
+            pub const LIST: [Self; [$(Self::$Command),+].len()] = [$(Self::$Command),+];
+
+            pub const fn usage_list(self) -> &'static [Usage] {
+                match self {
+                    $(Self::$Command => &[$(Usage::$Command(cmd::$Command::$Usage)),+]),+
+                }
+            }
+
+            pub const fn input(self) -> &'static str {
+                match self {
+                    $(Self::$Command => $input),+
+                }
+            }
+
+            pub const fn help(self) -> &'static str {
+                match self {
+                    $(Self::$Command => $help),+
+                }
+            }
+
+            pub fn run(
+                self,
+                cout: &mut ConsoleOut,
+                cin: &mut ConsoleIn,
+                data: &mut ProgramData,
+                args: &[&str],
+            ) -> Result<CmdReturn, CmdError> {
+                match self {
+                    $(
+                        Self::$Command => {
+                            $(
+                                let x: Result<CmdReturn, CmdError> = ($def)(cout, cin, data, args);
+                                if !matches!(x, Err(CmdError::CheckUsage(_))) {
+                                    return x;
+                                }
+                            )+
+                            Err(CmdError::CheckUsage(self))
+                        }
+                    ),+
+                }
+            }
+        }
+
+        mod cmd {
+            $(
+                $(#[$meta])*
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+                pub enum $Command {
+                    $($Usage),+
+                }
+            )+
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Usage {
+            $($Command(cmd::$Command),)+
+        }
+
+        impl Usage {
+            pub const fn template(self) -> &'static str {
+                match self {
+                    $($(Self::$Command(cmd::$Command::$Usage) => $template,)+)+
+                }
+            }
+
+            pub const fn help(self) -> &'static str {
+                match self {
+                    $($(Self::$Command(cmd::$Command::$Usage) => $usage_help,)+)+
+                }
+            }
         }
     };
 }
 
 define_commands!{
-    Help,
-    Close,
-    Cls,
-    Echo,
-    Dbg,
-    Focus,
-    ColorVerts,
-    ColorEdges,
-    ColorBackground,
-    SvRoute,
-    SvRouteAdd,
-    SvRouteList,
-    SvRouteClear,
-    SvNew,
-    SvEdge,
-    SvLoad,
-    SvSave,
-    Tempo,
-    Skip,
-    Take,
+    #[input = "help"]
+    #[help = "Display information about commands."]
+    Help {
+        #[template = ""]
+        #[help = "Display general information about all commands."]
+        All(run_help_all),
+        #[template = "<COMMAND>"]
+        #[help = "Display more specific information about a specific command."]
+        One(run_help_one),
+    },
+    #[input = "close"]
+    #[help = "Close the application."]
+    Close {
+        #[template = ""]
+        #[help = "Close the application immediately."]
+        Basic(run_close),
+    },
+    #[input = "cls"]
+    #[help = "Clear the console."]
+    Cls {
+        #[template = ""]
+        #[help = "Clear the console history text."]
+        Basic(run_cls),
+    },
+    #[input = "echo"]
+    #[help = "Repeat the arguments."]
+    Echo {
+        #[template = "[ANY]..."]
+        #[help = "Print the argument(s) or pass them as arguments to the next command in the pipeline."]
+        Basic(run_echo),
+    },
+    #[input = "dbg"]
+    #[help = "Toggle debug messages."]
+    Dbg {
+        #[template = ""]
+        #[help = "Toggle whether debug messages are displayed."]
+        Toggle(run_dbg_toggle),
+        #[template = "true|false"]
+        #[help = "Enable or disable the display of debug messages."]
+        Set(run_dbg_set),
+    },
+    #[input = "focus"]
+    #[help = "Focus a vertex."]
+    Focus {
+        #[template = "<ID|ALIAS>"]
+        #[help = "Pan and zoom the camera to focus the specified vertex."]
+        Vertex(run_focus_vertex),
+        #[template = "reset"]
+        #[help = "Reset the pan and zoom to the original orientation."]
+        Reset(run_focus_reset),
+        #[template = ""]
+        #[help = "Print the ID of the currently focused vertex or pass it as an argument to the next command in the pipeline."]
+        Print(run_focus_print),
+    },
+    #[input = "color.verts"]
+    #[help = "Set the color of all vertices."]
+    ColorVerts {
+        #[template = "#<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>"]
+        #[help = "Set the base color used to render all vertices."]
+        General(run_color_verts_general),
+        #[template = "#<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME> <ID|ALIAS>..."]
+        #[help = "[UNDER CONSTRUCTION] Set the base color used to render the specified vertices."]
+        Specific(run_color_verts_specific),
+    },
+    #[input = "color.edges"]
+    #[help = "Set the color of all edges."]
+    ColorEdges {
+        #[template = "#<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>"]
+        #[help = "Set the base color used to render all edges."]
+        Basic(run_color_edges),
+    },
+    #[input = "color.bg"]
+    #[help = "Set the color of the background."]
+    ColorBackground {
+        #[template = "#<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>"]
+        #[help = "Set the base color used to render background."]
+        Basic(run_color_background),
+    },
+    #[input = "sv.route"]
+    #[help = "Generate a route."]
+    SvRoute {
+        #[template = "<ID|ALIAS> <ID|ALIAS>..."]
+        #[help = "Begin generating a route starting from the first vertex and visiting every following vertex in an order the minimizes total distance travelled."]
+        Immediate(run_sv_route_immediate),
+        #[template = "-i|interactive"]
+        #[help = "Interactively provide targets to generate a route with by clicking on vertices in the visualizer with your mouse. \
+                  Run the command `sv.route` without arguments when you are finished selecting targets."]
+        Interactive(run_sv_route_interactive),
+    },
+    #[input = "sv.route.add"]
+    #[help = "Add targets to the current route."]
+    SvRouteAdd {
+        #[template = ""]
+        #[help = "Add more targets for the current route to visit. If any have already been visited, the generator will target them again \
+                  as if the current final result is the start of a new route."]
+        Immediate(run_sv_route_add_immediate),
+        #[template = "-i|interactive"]
+        #[help = "Interactively provide targets to generate a route with by clicking on vertices in the visualizer with your mouse. \
+                  Run the command `sv.route` without arguments when you are finished selecting targets."]
+        Interactive(run_sv_route_add_interactive),
+    },
+    #[input = "sv.route.list"]
+    #[help = "List the results of the current route."]
+    SvRouteList {
+        #[template = ""]
+        #[help = "Print the results of the current route in order or pass them as arguments to the next command in the pipeline."]
+        Basic(run_sv_route_list),
+    },
+    #[input = "sv.route.clear"]
+    #[help = "Clear the current route."]
+    SvRouteClear {
+        #[template = ""]
+        #[help = "Remove all targets, results, and visuals from the current route."]
+        Basic(run_sv_route_clear),
+    },
+    #[input = "sv.new"]
+    #[help = "Create a new vertex."]
+    SvNew {
+        #[template = "<ID> [ALIAS] x:<???>/y:<???>[/z:<???>]"]
+        #[help = "Create a new vertex with the specified name/alias at the specified position. It will start with no edges. The alias can be the same as the ID, \
+                  but neither the ID nor alias may match the ID of any existing vertex, nor may either match the alias of any existing vertex."]
+        Basic(run_sv_new),
+    },
+    #[input = "sv.edge"]
+    #[help = "Create a new edge."]
+    SvEdge {
+        #[template = "<ID|ALIAS> [--] <ID|ALIAS>..."]
+        #[help = "Create two-way edges connecting the prior vertex to each of the following vertices not separated by `--`s. A vertex cannot have an edge to itself. \
+                  When one or more vertices not separated with `--`s are followed by a `--`, each vertex in that subset will be connected to each vertex in the following subset."]
+        Basic(run_sv_edge),
+    },
+    #[input = "sv.load"]
+    #[help = "Load a graph from a file."]
+    SvLoad {
+        #[template = "<PATH>"]
+        #[help = "Load a weight graph map from the specified file path."]
+        Basic(run_sv_load),
+    },
+    #[input = "sv.save"]
+    #[help = "Save the graph to a file."]
+    SvSave {
+        #[template = "<PATH>"]
+        #[help = "Save the current weighted graph map to the specified file path. If the file does not exist, it will be created."]
+        Basic(run_sv_save),
+    },
+    #[input = "tempo"]
+    #[help = "Set the tempo of the route generator."]
+    Tempo {
+        #[template = "reset|sync|sprint|instant|pause|ticks:<???>/ms:<???>"]
+        #[help = "Set the rate at which the route generator performs update steps in ticks per millisecond. \
+                  Ticks can only occur during frames, so if the 'ms' are lower the duration of a single frame, \
+                  multiple ticks will occur during a frame and only the latest one will be visualized in that frame.\n\
+                  - `reset`: set the tempo to 1 tick per millisecond.\n\
+                  - `sync`: set the tempo to 1 tick per frame.\n\
+                  - `sprint`: set the tempo to the fastest possible while keeping the current framerate.\n\
+                  - `instant`: set the tempo to 1 tick per 0 milliseconds, blocking until the route is completed.\n\
+                  - `pause`: set the tempo to 0 ticks per millisecond."]
+        Basic(run_tempo),
+    },
+    #[input = "skip"]
+    #[help = "Repeat all but the first n arguments."]
+    Skip {
+        #[template = "<N> [ANY]..."]
+        #[help = "Pass all arguments after the first `n` arguments (after the argument for `n`) as arguments to the next command in the pipeline."]
+        Basic(run_skip),
+    },
+    #[input = "take"]
+    #[help = "Only repeat the first n arguments."]
+    Take {
+        #[template = "<N> [ANY]..."]
+        #[help = "Pass the first `n` arguments (after the argument for `n`) as arguments to the next command in the pipeline."]
+        Basic(run_take),
+    },
 }
 
-#[derive(Debug)]
-pub enum FromCmdError {
-    Unknown(String),
+trait ParseVert {
+    type Err;
+
+    fn parse_vert(&self, graph: &WeightedGraph) -> Result<VertexID, Self::Err>;
 }
-impl std::fmt::Display for FromCmdError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unknown(cmd) => write!(f, "No such command `{cmd}`"),
+
+impl ParseVert for str {
+    type Err = CmdError;
+
+    fn parse_vert(&self, graph: &WeightedGraph) -> Result<VertexID, Self::Err> {
+        graph.find_vert(self)
+            .ok_or_else(|| CmdError::VertexDNE(self.to_string()))
+    }
+}
+
+pub fn cmd_run(
+    line: &str,
+    cout: &mut ConsoleOut,
+    cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+) -> Result<CmdReturn, CmdError> {
+    let mut prev_buf;
+    let mut prev: Option<CmdReturn> = None;
+    let command = line.split('|')
+        .map(|s| s.split_whitespace().collect::<Vec<_>>());
+
+    for mut item in command {
+        if let Some(prev) = prev {
+            prev_buf = prev.get();
+            item.extend(prev_buf.iter().map(String::as_str));
         }
+        let [cmd, args @ ..] = &item[..] else { return Err(CmdError::NoSuchCmd(String::new())) };
+        prev = Some(cmd.parse::<Cmd>().and_then(|cmd| cmd.run(cout, cin, data, args))?);
     }
-}
-impl std::error::Error for FromCmdError {}
-
-impl std::str::FromStr for Cmd {
-    type Err = FromCmdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::LIST.into_iter()
-            .find(|cmd| s == cmd.info().input)
-            .ok_or_else(|| FromCmdError::Unknown(s.to_string()))
+    let mut final_ret = prev.expect("line should not be empty");
+    for ret in &mut final_ret.rets {
+        *ret = ret.to_owned();
     }
+    Ok(final_ret)
 }
 
+fn run_help_all(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if args.is_empty() {
+        let cmd_column_width = Cmd::LIST.into_iter()
+            .map(|cmd| cmd.input().len())
+            .max()
+            .unwrap() + 2;
+
+        let mut msg = String::with_capacity(2048);
+        msg.push_str("<color = #48f19d>Commands:</color>");
+        for cmd in &Cmd::LIST {
+            msg.push_str("\n    <color = #0096e6>");
+            let input = cmd.input();
+            msg.push_str(cmd.input());
+            msg.push_str("</color>");
+            for _ in input.len()..cmd_column_width {
+                msg.push(' ');
+            }
+            msg.push_str(cmd.help());
+        }
+
+        Ok(CmdReturn::disp(move |cout, _| console_log!(cout, Info, "{msg}")))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Help))
+    }
+}
 
 impl Cmd {
-    pub const fn input(self) -> &str {
+    fn help_msg(self) -> String {
+        let template_column_width = self.usage_list().into_iter()
+            .map(|usage| self.input().len() + if !usage.template().is_empty() { usage.template().len() + 1 } else { 0 })
+            .max()
+            .unwrap() + 2;
+
+        let mut msg = String::with_capacity(2048);
+        msg.push_str("<color = #48f19d>Usage:</color>");
+        for usage in self.usage_list() {
+            msg.push_str("\n    <color = #0096e6>");
+            let input = self.input();
+            msg.push_str(input);
+            msg.push_str("</color>");
+            let template = usage.template();
+            let column_used = if !template.is_empty() {
+                msg.push_str(" <color = #0096e6aa>");
+                msg.push_str(template);
+                msg.push_str("</color>");
+                input.len() + template.len() + 1
+            } else {
+                input.len()
+            };
+            let mut lines_it = usage.help().lines();
+            if let Some(line) = lines_it.next() {
+                for _ in column_used..template_column_width {
+                    msg.push(' ');
+                }
+                msg.push_str(line);
+
+                for line in lines_it {
+                    msg.push_str("\n    ");
+                    for _ in 0..template_column_width {
+                        msg.push(' ');
+                    }
+                    msg.push_str(line);
+                }
+            }
+        }
+        msg
+    }
+}
+
+fn run_help_one(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [cmd] = args {
+        let cmd = cmd.parse::<Cmd>()
+            .map_err(|_| CmdError::CheckUsage(Cmd::Help))?;
+
+        Ok(CmdReturn::disp(move |cout, _| console_log!(cout, Info, "{}", cmd.help_msg())))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Help))
+    }
+}
+
+fn run_close(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if args.is_empty() {
+        data.should_close = true;
+        Ok(CmdReturn::void())
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Cls))
+    }
+}
+
+fn run_cls(
+    cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if args.is_empty() {
+        cout.clear_log();
+        Ok(CmdReturn::void())
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Cls))
+    }
+}
+
+fn run_echo(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    Ok(CmdReturn::new(
+        args.into_iter().map(<&str>::to_string).collect(),
+        |cout, _, args| console_log!(cout, Info, "{}", args.join(" "))),
+    )
+}
+
+fn run_dbg_toggle(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if args.is_empty() {
+        data.is_debugging = !data.is_debugging;
+        Ok(CmdReturn::new(
+            vec![if data.is_debugging { "true" } else { "false" }.to_string()],
+            |cout, data, _| console_log!(cout, Info, "debug messages are now {}", if data.is_debugging { "enabled" } else { "disabled" })
+        ))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Dbg))
+    }
+}
+
+fn run_dbg_set(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [set_arg] = args {
+        data.is_debugging = set_arg.parse::<bool>()
+            .map_err(|e| CmdError::ParseBool(e))?;
+
+        Ok(CmdReturn::new(
+            vec![if data.is_debugging { "true" } else { "false" }.to_string()],
+            |cout, data, _| console_log!(cout, Info, "debug messages are now {}", if data.is_debugging { "enabled" } else { "disabled" })
+        ))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Dbg))
+    }
+}
+
+fn run_focus_vertex(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [target_arg] = args && &**target_arg != "reset" {
+        let vert = data.graph.verts().iter()
+            .find(|vert| (vert.id.eq_ignore_ascii_case(target_arg) || vert.alias.eq_ignore_ascii_case(target_arg)))
+            .ok_or_else(|| CmdError::VertexDNE(target_arg.to_string()))?;
+
+        data.camera.target = vert.pos;
+        data.camera.position = data.camera.target + Vector3::new(0.0, 400.0, 0.0);
+        Ok(CmdReturn::new(vec![vert.alias.clone()], move |cout, _, s| console_log!(cout, Info, "focused vertex {}", s[0])))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Focus))
+    }
+}
+
+fn run_focus_reset(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if matches!(args, ["reset"]) {
+        data.camera.position = CAMERA_POSITION_DEFAULT;
+        data.camera.target = Vector3::zero();
+        Ok(CmdReturn::void())
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Focus))
+    }
+}
+
+fn run_focus_print(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if args.is_empty() {
+        let vert = data.graph.verts().iter()
+            .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, data.camera.target, 1.0));
+
+        if let Some(target) = vert {
+            Ok(CmdReturn::new(
+                vec![target.id.clone()],
+                |cout, _, args| console_log!(cout, Info, "currently focusing vertex {}", args[0])),
+            )
+        } else {
+            Ok(CmdReturn::new(
+                vec![],
+                |cout, _, _| console_log!(cout, Info, "no vertex is currently focused")),
+            )
+        }
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Focus))
+    }
+}
+
+fn run_color_verts_general(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [color_arg] = args {
+        data.verts_color = color_arg.parse::<RichColor>()
+            .map(|RichColor(c)| c)
+            .map_err(|e| CmdError::ParseColor(e))?;
+        Ok(CmdReturn::disp(|cout, _| console_log!(cout, Info, "updated vertex color")))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::ColorVerts))
+    }
+}
+
+fn run_color_verts_specific(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    _args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!("run_color_verts_specific requires per-vertex colors")
+}
+
+fn run_color_edges(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [color_arg] = args {
+        data.edges_color = color_arg.parse::<RichColor>()
+            .map(|RichColor(c)| c)
+            .map_err(|e| CmdError::ParseColor(e))?;
+        Ok(CmdReturn::disp(|cout, _| console_log!(cout, Info, "updated edge color")))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::ColorVerts))
+    }
+}
+
+fn run_color_background(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [color_arg] = args {
+        data.background_color = color_arg.parse::<RichColor>()
+            .map(|RichColor(c)| c)
+            .map_err(|e| CmdError::ParseColor(e))?;
+        Ok(CmdReturn::disp(|cout, _| console_log!(cout, Info, "updated edge color")))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::ColorVerts))
+    }
+}
+
+fn run_sv_route_immediate(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [start, targets @ ..] = args && !targets.is_empty() && !matches!(&**start, "-i"|"interactive") {
+        let start = start.parse_vert(&data.graph)?;
+        let targets = args.iter()
+            .map(|s| s.parse_vert(&data.graph))
+            .collect::<Result<Vec<VertexID>, CmdError>>()?;
+
+        data.route = Some(RouteGenerator::new(data.graph.verts().len(), start, targets));
+        Ok(CmdReturn::disp(|cout, _| console_log!(cout, Info, "generating route")))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvRoute))
+    }
+}
+
+fn run_sv_route_interactive(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if matches!(args, ["-i"|"interactive"]) {
+        todo!()
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvRoute))
+    }
+
+    // let mut args = args.peekable();
+    // let targets = match args.peek() {
+    //     Some(&("-i" | "interactive")) => {
+    //         console_log!(cout, Info, "click each target with the mouse; order doesn't matter except that the first will be the start");
+    //         console_log!(cout, Info, "click a target again to un-target it");
+    //         console_log!(cout, Info, "run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished");
+    //         cin.insert_over_selection("sv.route");
+    //         *is_giving_interactive_targets = true;
+    //         cin.unfocus();
+    //         return Ok(String::new());
+    //     }
+    //     Some(_) => {
+    //         args
+    //             .map(|id| graph.find_vert(id).map_err(|start| CmdError::VertexDNE(start.to_string())))
+    //             .collect::<Result<Vec<VertexID>, CmdError>>()?
+    //     },
+    //     None => interactive_targets,
+    // };
+
+    // let mut target_iter = targets.into_iter().peekable();
+    // let start = target_iter.next().ok_or(CmdError::CheckUsage(Cmd::SvRoute))?;
+    // if target_iter.peek().is_none() {
+    //     return Err(CmdError::MissingArgs("targets"));
+    // }
+    // *route = Some(RouteGenerator::new(graph.verts().len(), start, target_iter));
+    // console_log!(cout, Info, "generating route");
+    // Ok(String::new())
+}
+
+fn run_sv_route_add_immediate(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_sv_route_add_interactive(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_sv_route_list(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_sv_route_clear(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_sv_new(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_sv_edge(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_sv_load(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_sv_save(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_tempo(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    todo!()
+}
+
+fn run_skip(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [n_arg, rest @ ..] = args && n_arg.chars().all(char::is_numeric) {
+        let n = n_arg.parse::<usize>().map_err(|e| CmdError::ParseInt(e))?;
+        Ok(CmdReturn::pure(rest.into_iter().skip(n).map(<&str>::to_string).collect()))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Skip))
+    }
+}
+
+fn run_take(
+    _cout: &mut ConsoleOut,
+    _cin: &mut ConsoleIn,
+    _data: &mut ProgramData,
+    args: &[&str],
+) -> Result<CmdReturn, CmdError> {
+    if let [n_arg, rest @ ..] = args && n_arg.chars().all(char::is_numeric) {
+        let n = n_arg.parse::<usize>().map_err(|e| CmdError::ParseInt(e))?;
+        Ok(CmdReturn::pure(rest.into_iter().take(n).map(<&str>::to_string).collect()))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Take))
+    }
+}
+
+
+#[derive(Debug)]
+pub enum CmdError {
+    CheckUsage(Cmd),
+    VertexDNE(String),
+    NoExistingRoute,
+    ParseCoords(ParseCoordsError),
+    ParseColor(ParseColorError),
+    ParseBool(std::str::ParseBoolError),
+    ParseInt(std::num::ParseIntError),
+    ParseFloat(std::num::ParseFloatError),
+    ParseTempo(ParseTempoError),
+    LoadGraph(LoadGraphError),
+    NoSuchCmd(String),
+    IOError(std::io::Error),
+}
+
+impl std::fmt::Display for CmdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Self::CheckUsage(cmd) => f.write_str(cmd.help_msg().as_str()),
+            Self::VertexDNE(id) => write!(f, "vertex \"{id}\" does not exist"),
+            Self::NoExistingRoute => f.write_str("no ongoing route to extend"),
+            Self::ParseCoords(_) => f.write_str("could not parse coordinates"),
+            Self::ParseColor(_) => f.write_str("could not parse color"),
+            Self::ParseBool(_) => f.write_str("could not parse boolean"),
+            Self::ParseInt(_) => f.write_str("could not parse integer"),
+            Self::ParseFloat(_) => f.write_str("could not parse float"),
+            Self::ParseTempo(_) => f.write_str("could not parse tempo"),
+            Self::LoadGraph(_) => f.write_str("could not load graph"),
+            Self::NoSuchCmd(cmd) => write!(f, "no such command `{cmd}`"),
+            Self::IOError(_) => f.write_str("filesystem IO error"),
+        }
+    }
+}
+
+impl std::error::Error for CmdError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Cmd::Help            => help            ::Help           ::INPUT,
-            Cmd::Close           => close           ::Close          ::INPUT,
-            Cmd::Cls             => cls             ::Cls            ::INPUT,
-            Cmd::Echo            => echo            ::Echo           ::INPUT,
-            Cmd::Dbg             => dbg             ::Dbg            ::INPUT,
-            Cmd::Focus           => focus           ::Focus          ::INPUT,
-            Cmd::ColorVerts      => color_verts     ::ColorVerts     ::INPUT,
-            Cmd::ColorEdges      => color_edges     ::ColorEdges     ::INPUT,
-            Cmd::ColorBackground => color_background::ColorBackground::INPUT,
-            Cmd::SvRoute         => sv_route        ::SvRoute        ::INPUT,
-            Cmd::SvRouteAdd      => sv_route_add    ::SvRouteAdd     ::INPUT,
-            Cmd::SvRouteList     => sv_route_list   ::SvRouteList    ::INPUT,
-            Cmd::SvRouteClear    => sv_route_clear  ::SvRouteClear   ::INPUT,
-            Cmd::SvNew           => sv_new          ::SvNew          ::INPUT,
-            Cmd::SvEdge          => sv_edge         ::SvEdge         ::INPUT,
-            Cmd::SvLoad          => sv_load         ::SvLoad         ::INPUT,
-            Cmd::SvSave          => sv_save         ::SvSave         ::INPUT,
-            Cmd::Tempo           => tempo           ::Tempo          ::INPUT,
-            Cmd::Skip            => skip            ::Skip           ::INPUT,
-            Cmd::Take            => take            ::Take           ::INPUT,
-        }
-    }
+            | Self::CheckUsage(_)
+            | Self::VertexDNE(_)
+            | Self::NoExistingRoute
+            | Self::NoSuchCmd(_)
+                => None,
 
-    pub fn run<'a>(
-        self,
-        cout: &mut ConsoleOut,
-        cin: &mut ConsoleIn,
-        data: &mut ProgramData,
-        args: &'a str,
-    ) -> Result<(), ()> {
-        match self {
-            Cmd::Help            => help            ::Help           .run(cout, cin, data, args),
-            Cmd::Close           => close           ::Close          .run(cout, cin, data, args),
-            Cmd::Cls             => cls             ::Cls            .run(cout, cin, data, args),
-            Cmd::Echo            => echo            ::Echo           .run(cout, cin, data, args),
-            Cmd::Dbg             => dbg             ::Dbg            .run(cout, cin, data, args),
-            Cmd::Focus           => focus           ::Focus          .run(cout, cin, data, args),
-            Cmd::ColorVerts      => color_verts     ::ColorVerts     .run(cout, cin, data, args),
-            Cmd::ColorEdges      => color_edges     ::ColorEdges     .run(cout, cin, data, args),
-            Cmd::ColorBackground => color_background::ColorBackground.run(cout, cin, data, args),
-            Cmd::SvRoute         => sv_route        ::SvRoute        .run(cout, cin, data, args),
-            Cmd::SvRouteAdd      => sv_route_add    ::SvRouteAdd     .run(cout, cin, data, args),
-            Cmd::SvRouteList     => sv_route_list   ::SvRouteList    .run(cout, cin, data, args),
-            Cmd::SvRouteClear    => sv_route_clear  ::SvRouteClear   .run(cout, cin, data, args),
-            Cmd::SvNew           => sv_new          ::SvNew          .run(cout, cin, data, args),
-            Cmd::SvEdge          => sv_edge         ::SvEdge         .run(cout, cin, data, args),
-            Cmd::SvLoad          => sv_load         ::SvLoad         .run(cout, cin, data, args),
-            Cmd::SvSave          => sv_save         ::SvSave         .run(cout, cin, data, args),
-            Cmd::Tempo           => tempo           ::Tempo          .run(cout, cin, data, args),
-            Cmd::Skip            => skip            ::Skip           .run(cout, cin, data, args),
-            Cmd::Take            => take            ::Take           .run(cout, cin, data, args),
+            Self::ParseCoords(e) => Some(e),
+            Self::ParseColor(e) => Some(e),
+            Self::ParseBool(e) => Some(e),
+            Self::ParseInt(e) => Some(e),
+            Self::ParseFloat(e) => Some(e),
+            Self::ParseTempo(e) => Some(e),
+            Self::LoadGraph(e) => Some(e),
+            Self::IOError(e) => Some(e),
         }
     }
 }
 
-mod help {
-    use super::*;
-
-    pub enum Args {
-        All,
-        One(one::Args),
-    }
-
-    pub struct Help;
-
-    impl Command for Help {
-        type Args<'a> = Args;
-        type Rets<'a> = ();
-        type Err = !;
-
-        const INPUT: &str;
-
-        fn run<'a>(
-            self,
-            cout: &mut ConsoleOut,
-            cin: &mut ConsoleIn,
-            data: &mut ProgramData,
-            args: &str,
-        ) -> Result<Self::Rets<'a>, Self::Err> {
-            todo!()
-        }
-    }
-
-    mod all {
-        use super::super::*;
-
-        pub struct All;
-
-        impl Usage for All {
-            type Args<'a> = ();
-            type Rets<'a> = ();
-            type Err = !;
-
-            fn run<'a>(
-                &mut self,
-                cout: &mut ConsoleOut,
-                cin: &mut ConsoleIn,
-                data: &mut ProgramData,
-                args: Self::Args<'a>,
-            ) -> Result<Self::Rets<'a>, Self::Err> {
-                todo!()
-            }
-        }
-    }
-
-    mod one {
-        use crate::command::{Usage, Arguments, Cmd};
-
-        pub struct Args { cmd: Cmd }
-
-        impl<'a> Arguments<'a> for Args {
-            type Err = !; // todo
-
-            fn parse(
-                _data: &crate::command::ProgramData, // for vertexID lookup
-                s: &'a str, // actual argument text
-            ) -> Result<Self, Self::Err> {
-                Cmd::parse(s)
-            }
-        }
-
-        pub struct One;
-
-        impl Usage for One {
-            type Args<'a> = ();
-            type Rets<'a> = ();
-            type Err = !;
-
-            fn run<'a>(
-                &mut self,
-                cout: &mut ConsoleOut,
-                cin: &mut ConsoleIn,
-                data: &mut ProgramData,
-                args: Self::Args<'a>,
-            ) -> Result<Self::Rets<'a>, Self::Err> {
-                todo!()
-            }
-        }
+impl From<std::io::Error> for CmdError {
+    fn from(value: std::io::Error) -> Self {
+        CmdError::IOError(value)
     }
 }
 
-mod close {
-    use super::*;
-
-    pub struct Close;
-
-    impl Command for Close {}
-}
-
-mod cls {
-    use super::*;
-
-    pub struct Cls;
-
-    impl Command for Cls {}
-}
-
-mod echo {
-    use super::*;
-
-    pub struct Echo;
-
-    impl Command for Echo {}
-}
-
-mod dbg {
-    use super::*;
-
-    pub struct Dbg;
-
-    impl Command for Dbg {}
-}
-
-mod focus {
-    use super::*;
-
-    pub struct Focus;
-
-    impl Command for Focus {}
-}
-
-mod color_verts {
-    use super::*;
-
-    pub struct ColorVerts;
-
-    impl Command for ColorVerts {}
-}
-
-mod color_edges {
-    use super::*;
-
-    pub struct ColorEdges;
-
-    impl Command for ColorEdges {}
-}
-
-mod color_background {
-    use super::*;
-
-    pub struct ColorBackground;
-
-    impl Command for ColorBackground {}
-}
-
-mod sv_route {
-    use super::*;
-
-    pub struct SvRoute;
-
-    impl Command for SvRoute {}
-}
-
-mod sv_route_add {
-    use super::*;
-
-    pub struct SvRouteAdd;
-
-    impl Command for SvRouteAdd {}
-}
-
-mod sv_route_list {
-    use super::*;
-
-    pub struct SvRouteList;
-
-    impl Command for SvRouteList {}
-}
-
-mod sv_route_clear {
-    use super::*;
-
-    pub struct SvRouteClear;
-
-    impl Command for SvRouteClear {}
-}
-
-mod sv_new {
-    use super::*;
-
-    pub struct SvNew;
-
-    impl Command for SvNew {}
-}
-
-mod sv_edge {
-    use super::*;
-
-    pub struct SvEdge;
-
-    impl Command for SvEdge {}
-}
-
-mod sv_load {
-    use super::*;
-
-    pub struct SvLoad;
-
-    impl Command for SvLoad {}
-}
-
-mod sv_save {
-    use super::*;
-
-    pub struct SvSave;
-
-    impl Command for SvSave {}
-}
-
-mod tempo {
-    use super::*;
-
-    pub struct Tempo;
-
-    impl Command for Tempo {}
-}
-
-mod skip {
-    use super::*;
-
-    pub struct Skip;
-
-    impl Command for Skip {}
-}
-
-mod take {
-    use super::*;
-
-    pub struct Take;
-
-    impl Command for Take {}
-}
-
+// pub fn run(args: &str) -> Result<Cow<'_, str>, CmdError> {
+//     let args.split_whitespace();
+// }
 
 // pub enum ArgValue<'a> {
 //     Text(&'a str),

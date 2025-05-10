@@ -1,5 +1,4 @@
 pub mod enrich;
-pub mod parse_color;
 pub mod input;
 pub mod output;
 

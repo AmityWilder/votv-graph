@@ -2,12 +2,14 @@
 #![feature(
     substr_range,           // used in serialization::Source
     str_split_remainder,
+    str_split_whitespace_remainder,
     assert_matches,
     iter_next_chunk,
     never_type,
     type_alias_impl_trait,
     impl_trait_in_assoc_type,
     associated_type_defaults,
+    let_chains,
 )]
 
 use std::num::NonZeroU128;
@@ -15,11 +17,13 @@ use std::time::{Duration, Instant};
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{ProgramData, Tempo};
+use command::{cmd_run, Cmd, ProgramData};
 use graph::{VertexID, WeightedGraph};
 use raylib::prelude::*;
 use route::{RouteGenerator, VertexClass, Visit};
+use types::Tempo;
 
+mod types;
 mod serialization;
 mod console;
 mod command;
@@ -37,7 +41,7 @@ pub trait MeasureTextEx {
 impl MeasureTextEx for RaylibHandle {}
 
 const VERTEX_RADIUS: f32 = 8.0;
-const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 1300.0, 0.0);
+const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 0.0, -1300.0);
 const SAFE_ZONE: f32 = 20.0;
 const UPSCALE: f32 = 2.0;
 
@@ -52,7 +56,7 @@ fn main() {
         camera: Camera3D::perspective(
             CAMERA_POSITION_DEFAULT,
             Vector3::zero(),
-            Vector3::new(0.0, 0.0, -1.0),
+            Vector3::new(0.0, -1.0, 0.0),
             45.0,
         ),
         tempo: Tempo::new(),
@@ -129,14 +133,20 @@ fn main() {
 
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
             cin.unfocus();
-            // console.command.clear();
         }
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
             if cin.is_focused() {
                 // finish giving command
-                Command::submit(&mut cout, &mut cin, &mut data);
-                if data.should_close {
-                    break 'window;
+                if let Some(command) = cin.submit_cmd(&mut cout).map(|s| s.to_string()) {
+                    match cmd_run(&command, &mut cout, &mut cin, &mut data) {
+                        Ok(x) => {
+                            if data.should_close { break 'window; }
+                            x.print(&mut cout, &data)
+                        }
+                        Err(e) => {
+                            console_log!(cout, Error, "{e}"); // todo: make this recursive
+                        }
+                    }
                 }
             } else {
                 // begin giving command
@@ -158,14 +168,15 @@ fn main() {
                 cursor_last_toggled = Instant::now();
             }
         } else {
-            let speed = 6.0*data.camera.position.distance_to(data.camera.target)/CAMERA_POSITION_DEFAULT.y;
+            const _: () = assert!(CAMERA_POSITION_DEFAULT.z != 0.0, "dividing by zero is bad");
+            let speed = 6.0*data.camera.position.distance_to(data.camera.target)/CAMERA_POSITION_DEFAULT.z.abs();
             let north = (rl.is_key_down(KeyboardKey::KEY_W) as i8 - rl.is_key_down(KeyboardKey::KEY_S) as i8) as f32;
             let east  = (rl.is_key_down(KeyboardKey::KEY_D) as i8 - rl.is_key_down(KeyboardKey::KEY_A) as i8) as f32;
             let up    = (rl.is_key_down(KeyboardKey::KEY_Q) as i8 - rl.is_key_down(KeyboardKey::KEY_E) as i8) as f32;
             let pitch = (rl.is_key_down(KeyboardKey::KEY_R) as i8 - rl.is_key_down(KeyboardKey::KEY_F) as i8) as f32;
             let yaw   = (rl.is_key_down(KeyboardKey::KEY_X) as i8 - rl.is_key_down(KeyboardKey::KEY_Z) as i8) as f32;
-            let pan = Vector3::new(east, 0.0, -north) * speed;
-            let zoom = Vector3::new(yaw, up, -pitch) * speed;
+            let pan = Vector3::new(east, -north, 0.0) * speed;
+            let zoom = Vector3::new(yaw, -pitch, up) * speed;
             data.camera.position += pan + zoom;
             data.camera.target += pan;
         }
@@ -204,7 +215,7 @@ fn main() {
                     }
                 }
 
-                Tempo::Paused => {}
+                Tempo::Pause => {}
 
                 Tempo::Exact { ticks, ms } => {
                     let ms_elapsed = route.last_step_elapsed().as_millis();
@@ -285,7 +296,7 @@ fn main() {
                 }
 
                 d.draw_capsule((data.camera.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (data.camera.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
-                d.draw_capsule((data.camera.target + Vector3::new( 0.0, 0.0, -5.0))*SCALE_FACTOR, (data.camera.target + Vector3::new(0.0, 0.0, 5.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                d.draw_capsule((data.camera.target + Vector3::new( 0.0, -5.0, 0.0))*SCALE_FACTOR, (data.camera.target + Vector3::new(0.0, 5.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
             }
 
             d.draw_rectangle_rec(Rectangle::new((mouse_tracking.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_screen_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
@@ -421,21 +432,25 @@ fn main() {
                 let char_step = Vector2::new(char_width + spacing, font_size);
                 d.set_text_line_spacing(0);
                 for (text, color) in sample.enrich(Color::WHITE, init) {
-                    d.draw_text_ex(&font, text, point, font_size, spacing, color);
+                    // let wrap_width = 128;
+                    let mut lines_it = text.split('\n');
+                    if let Some(line) = lines_it.next() {
+                        let mut last_line = line;
+                        d.draw_text_ex(&font, line, point, font_size, spacing, color);
+                        for line in lines_it {
+                            point.x = SAFE_ZONE;
+                            point.y += font_size;
+                            d.draw_text_ex(&font, line, point, font_size, spacing, color);
+                            last_line = line;
+                        }
 
-                    let (rows, last_line) = text
-                        .rsplit_once('\n')
-                        .map_or(
-                            (0, text),
-                            |(prior_lines, last_line)| (
-                                prior_lines.lines().count().max(1),
-                                last_line,
-                            ),
-                        );
-                    let cols = last_line.chars().count();
+                        let cols = last_line
+                            .enrich(Color::WHITE, "")
+                            .flat_map(|(s, _)| s.chars())
+                            .count();
 
-                    if rows > 0 { point.x = SAFE_ZONE; }
-                    point += Vector2::new(cols as f32, rows as f32)*char_step;
+                        point.x += cols as f32*char_step.x;
+                    }
                 }
 
                 {

@@ -133,14 +133,14 @@ impl ConsoleIn {
             KeyOrChar::Key(key) => {
                 if !self.current.is_empty() && !self.current.contains(' ') && matches!(key, KEY_TAB) {
                     {
-                        let mut prediction = Cmd::predict_cmd(&self.current);
-                        if let Some((cmd, _)) = prediction.next() {
-                            drop(prediction);
-                            self.selection_head = 0;
-                            self.selection_tail = self.current.len();
-                            self.insert_over_selection(cmd.input());
-                            return true;
-                        }
+                        // let mut prediction = Cmd::predict(&self.current);
+                        // if let Some((cmd, _)) = prediction.next() {
+                        //     drop(prediction);
+                        //     self.selection_head = 0;
+                        //     self.selection_tail = self.current.len();
+                        //     self.insert_over_selection(cmd.input());
+                        //     return true;
+                        // }
                     }
                 }
 

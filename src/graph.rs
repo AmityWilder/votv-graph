@@ -71,11 +71,10 @@ impl WeightedGraph {
             .map(|(v, vert)| (VertexID::try_from(v).expect(&format!("greater than {} vertices is not supported", VertexID::MAX)), vert))
     }
 
-    pub fn find_vert<'a>(&self, id_or_alias: &'a str) -> Result<VertexID, &'a str> {
+    pub fn find_vert<'a>(&self, id_or_alias: &'a str) -> Option<VertexID> {
         self.verts.iter()
             .position(|vert| vert.id.eq_ignore_ascii_case(id_or_alias) || vert.alias.eq_ignore_ascii_case(id_or_alias))
             .map(|v| VertexID::try_from(v).expect(&format!("greater than {} vertices is not supported", VertexID::MAX)))
-            .ok_or(id_or_alias)
     }
 
     pub fn add_edge(&mut self, a: VertexID, b: VertexID) {

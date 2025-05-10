@@ -1,49 +1,49 @@
 v0.0.1
 
 // Satellites
-Alpha    : A =      0.0, 0.0,      0.0
-Bravo    : B =   -100.0, 0.0,   -200.0
-Charlie  : C =      0.0, 0.0,   -200.0
-Delta    : D =    100.0, 0.0,   -200.0
-Echo     : E =    200.0, 0.0,   -100.0
-Foxtrot  : F =    200.0, 0.0,      0.0
-Golf     : G =    200.0, 0.0,    100.0
-Hotel    : H =    100.0, 0.0,    200.0
-India    : I =      0.0, 0.0,    200.0
-Juliett  : J =   -100.0, 0.0,    200.0
-Kilo     : K =   -200.0, 0.0,    100.0
-Lima     : L =   -200.0, 0.0,      0.0
-Mike     : M =   -200.0, 0.0,   -100.0
-November : N =   -300.0, 0.0,   -300.0
-Oscar    : O =    300.0, 0.0,   -300.0
-Papa     : P =    300.0, 0.0,    300.0
-Quebec   : Q =   -300.0, 0.0,    300.0
-Romeo    : R =   -500.0, 0.0,   -500.0
-Sierra   : S =      0.0, 0.0,   -500.0
-Tango    : T =    500.0, 0.0,   -500.0
-Uniform  : U =    500.0, 0.0,      0.0
-Victor   : V =    500.0, 0.0,    500.0
-Whiskey  : W =      0.0, 0.0,    500.0
-Xray     : X =   -500.0, 0.0,    500.0
-Yankee   : Y =   -500.0, 0.0,      0.0
-Zulu     : Z =  10000.0, 0.0,  10000.0
+Alpha    : A =      0.0,      0.0, 0.0
+Bravo    : B =   -100.0,   -200.0, 0.0
+Charlie  : C =      0.0,   -200.0, 0.0
+Delta    : D =    100.0,   -200.0, 0.0
+Echo     : E =    200.0,   -100.0, 0.0
+Foxtrot  : F =    200.0,      0.0, 0.0
+Golf     : G =    200.0,    100.0, 0.0
+Hotel    : H =    100.0,    200.0, 0.0
+India    : I =      0.0,    200.0, 0.0
+Juliett  : J =   -100.0,    200.0, 0.0
+Kilo     : K =   -200.0,    100.0, 0.0
+Lima     : L =   -200.0,      0.0, 0.0
+Mike     : M =   -200.0,   -100.0, 0.0
+November : N =   -300.0,   -300.0, 0.0
+Oscar    : O =    300.0,   -300.0, 0.0
+Papa     : P =    300.0,    300.0, 0.0
+Quebec   : Q =   -300.0,    300.0, 0.0
+Romeo    : R =   -500.0,   -500.0, 0.0
+Sierra   : S =      0.0,   -500.0, 0.0
+Tango    : T =    500.0,   -500.0, 0.0
+Uniform  : U =    500.0,      0.0, 0.0
+Victor   : V =    500.0,    500.0, 0.0
+Whiskey  : W =      0.0,    500.0, 0.0
+Xray     : X =   -500.0,    500.0, 0.0
+Yankee   : Y =   -500.0,      0.0, 0.0
+Zulu     : Z =  10000.0,  10000.0, 0.0
 
 // Transformers
-TR_1 : TR1 =  400.0, 0.0,  200.0 // Transformer 1
-TR_2 : TR2 = -540.0, 0.0,  232.0 // Transformer 2
-TR_3 : TR3 = -400.0, 0.0, -475.0 // Transformer 3
+TR_1 : TR1 =  400.0,  200.0, 0.0 // Transformer 1
+TR_2 : TR2 = -540.0,  232.0, 0.0 // Transformer 2
+TR_3 : TR3 = -400.0, -475.0, 0.0 // Transformer 3
 
 // Bridges
-Bridge_Alpha_East  : brAe =  -76.9, 0.0,   11.7 // Bridge Alpha East
-Bridge_Alpha_West  : brAw =  -51.0, 0.0,   11.8 // Bridge Alpha West
-Bridge_Quebec_East : brQe = -223.2, 0.0,  285.1 // Bridge Quebec East
-Bridge_Quebec_West : brQw = -197.3, 0.0,  282.8 // Bridge Quebec West
-Bridge_Xray_East   : brXe = -400.2, 0.0,  497.7 // Bridge Xray East
-Bridge_Xray_West   : brXw = -376.6, 0.0,  508.7 // Bridge Xray West
-Bridge_Echo_East   : brEe =  116.2, 0.0, -121.9 // Bridge Echo East
-Bridge_Echo_West   : brEw =  120.7, 0.0,  -96.3 // Bridge Echo West
-Bridge_Oscar_East  : brOe =  274.2, 0.0, -360.0 // Bridge Oscar East
-Bridge_Oscar_West  : brOw =  295.5, 0.0, -345.0 // Bridge Oscar West
+Bridge_Alpha_East  : brAe =  -76.9,   11.7, 0.0 // Bridge Alpha East
+Bridge_Alpha_West  : brAw =  -51.0,   11.8, 0.0 // Bridge Alpha West
+Bridge_Quebec_East : brQe = -223.2,  285.1, 0.0 // Bridge Quebec East
+Bridge_Quebec_West : brQw = -197.3,  282.8, 0.0 // Bridge Quebec West
+Bridge_Xray_East   : brXe = -400.2,  497.7, 0.0 // Bridge Xray East
+Bridge_Xray_West   : brXw = -376.6,  508.7, 0.0 // Bridge Xray West
+Bridge_Echo_East   : brEe =  116.2, -121.9, 0.0 // Bridge Echo East
+Bridge_Echo_West   : brEw =  120.7,  -96.3, 0.0 // Bridge Echo West
+Bridge_Oscar_East  : brOe =  274.2, -360.0, 0.0 // Bridge Oscar East
+Bridge_Oscar_West  : brOw =  295.5, -345.0, 0.0 // Bridge Oscar West
 
 A -- E
 A -- F
