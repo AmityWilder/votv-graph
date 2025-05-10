@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{cmd_run, Cmd, ProgramData};
+use command::{Cmd, ProgramData, Routine};
 use graph::{VertexID, WeightedGraph};
 use raylib::prelude::*;
 use route::{RouteGenerator, VertexClass, Visit};
@@ -48,6 +48,7 @@ const UPSCALE: f32 = 2.0;
 fn main() {
     let mut cin = ConsoleIn::new();
     let mut cout = ConsoleOut::new();
+    let mut console_buf = String::with_capacity(4 * 1024);
 
     let mut data = ProgramData {
         is_debugging: false,
@@ -67,6 +68,9 @@ fn main() {
         edges_color: Color::new(255, 0, 0, 63),
         background_color: Color::new(4, 0, 0, 255),
     };
+
+    // ongoing simultaneous routines
+    let mut routines = Vec::new();
 
     let mut is_cursor_shown = false;
     let mut cursor_last_toggled = Instant::now();
@@ -105,8 +109,6 @@ fn main() {
 
     mouse_tracking = rl.get_mouse_position();
 
-    let mut console_buf = String::with_capacity(4 * 1024);
-
     'window: while !rl.window_should_close() {
         if rl.is_window_resized() {
             let width = u32::try_from(rl.get_screen_width()).unwrap()*UPSCALE as u32;
@@ -137,22 +139,34 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
             if cin.is_focused() {
                 // finish giving command
-                if let Some(command) = cin.submit_cmd(&mut cout).map(|s| s.to_string()) {
-                    match cmd_run(&command, &mut cout, &mut cin, &mut data) {
-                        Ok(x) => {
-                            if data.should_close { break 'window; }
-                            x.print(&mut cout, &data)
-                        }
-                        Err(e) => {
-                            console_log!(cout, Error, "{e}"); // todo: make this recursive
-                        }
-                    }
+                if let Some(command) = cin.submit_cmd(&mut cout) {
+                    routines.push(Routine::new(command));
                 }
             } else {
                 // begin giving command
                 cin.focus();
                 is_cursor_shown = true;
                 cursor_last_toggled = Instant::now();
+            }
+        }
+
+        // tick routines
+        {
+            routines.retain_mut(|routine| {
+                match routine.step(&mut cout, &mut cin, &mut data) {
+                    std::ops::ControlFlow::Continue(()) => true,
+                    std::ops::ControlFlow::Break(result) => {
+                        match result {
+                            Ok(x) => x.print(&mut cout, &data),
+                            Err(e) => console_log!(cout, Error, "{e}"), // todo: make this recursive
+                        }
+                        false
+                    }
+                }
+            });
+
+            if data.should_close {
+                break 'window;
             }
         }
 

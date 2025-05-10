@@ -193,32 +193,14 @@ impl RouteGenerator {
                 }
             }
 
-            Phase::Backtrack { parent, insert_at, i } => {
+            Phase::Backtrack { parent, insert_at, i: _ } => {
                 if let Some(Visit { parent: Some(p), .. }) = &self.visited[*parent as usize] {
                     self.result.insert(*insert_at, *parent);
                     *parent = *p;
                 } else {
                     console_dbg!(cout, Info, 2, "adding vertex {} to results", self.root);
                     if self.targets.is_empty() {
-                        let final_route = self.result.iter()
-                            .map(|&v| graph.vert(v).id.as_str())
-                            .collect::<Vec<&str>>()
-                            .join(" - ");
-                        console_log!(cout, Route, "{final_route}");
                         self.is_finished = true;
-                        let mut distance = 0.0;
-                        self.visited.fill(const { None });
-                        self.visited[self.result[0] as usize] = Some(Visit { distance, parent: None });
-                        if *i + 1 < self.result.len() {
-                            let a = &self.result[*i];
-                            let b = &self.result[*i + 1];
-                            distance += graph.adjacent(*a).iter()
-                                .find_map(|e| (&e.vertex == b).then_some(e.weight))
-                                .expect("results should be adjacent");
-                            self.visited[*b as usize] = Some(Visit { distance, parent: Some(*a) });
-                            *i += 1;
-                        }
-                        console_log!(cout, Route, "total distance: {distance}");
                     } else {
                         self.begin_phase_edge(cout);
                     }
