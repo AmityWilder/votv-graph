@@ -1,7 +1,7 @@
 use std::{ops::ControlFlow, str::FromStr, task::Poll};
 use raylib::prelude::*;
 // use snippet::Snippet;
-use crate::{console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
+use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
 
 pub mod snippet;
 // pub mod exec;
@@ -12,7 +12,7 @@ pub struct ProgramData {
     pub graph: WeightedGraph,
     pub route: Option<RouteGenerator>,
     pub is_debugging: bool,
-    pub camera: Camera3D,
+    pub orbit: Orbiter,
     pub tempo: Tempo,
     pub interactive_targets: Vec<VertexID>,
     pub is_giving_interactive_targets: bool,
@@ -625,8 +625,8 @@ fn run_focus_vertex(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut Pro
             .find(|vert| (vert.id.eq_ignore_ascii_case(target_arg) || vert.alias.eq_ignore_ascii_case(target_arg)))
             .ok_or_else(|| CmdError::VertexDNE(target_arg.to_string()))?;
 
-        data.camera.target = vert.pos;
-        data.camera.position = data.camera.target + Vector3::new(0.0, 400.0, 0.0);
+        data.orbit.target = vert.pos;
+        data.orbit.length = 400.0;
         Ok(CmdPromise::Ready(CmdReturn::new(vec![vert.alias.clone()], CmdRetDisplay::FocusVertex)))
     } else {
         Err(CmdError::CheckUsage(Cmd::Focus))
@@ -635,8 +635,8 @@ fn run_focus_vertex(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut Pro
 
 fn run_focus_reset(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
     if matches!(args, ["reset"]) {
-        data.camera.position = CAMERA_POSITION_DEFAULT;
-        data.camera.target = Vector3::zero();
+        data.orbit.target = Vector3::zero();
+        data.orbit.length = CAMERA_LENGTH_DEFAULT;
         Ok(CmdPromise::Ready(CmdReturn::void()))
     } else {
         Err(CmdError::CheckUsage(Cmd::Focus))
@@ -646,7 +646,7 @@ fn run_focus_reset(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut Prog
 fn run_focus_print(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
     if args.is_empty() {
         let vert = data.graph.verts().iter()
-            .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, data.camera.target, 1.0));
+            .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, data.orbit.target, 1.0));
 
         Ok(CmdPromise::Ready(CmdReturn::new(vert.into_iter().map(|target| target.id.clone()).collect::<Vec<_>>(), CmdRetDisplay::FocusPrint)))
     } else {

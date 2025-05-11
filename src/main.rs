@@ -14,6 +14,7 @@
 
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
+use camera::Orbiter;
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
@@ -23,6 +24,7 @@ use raylib::prelude::*;
 use route::{RouteGenerator, VertexClass, Visit};
 use types::Tempo;
 
+mod camera;
 mod types;
 mod serialization;
 mod console;
@@ -41,7 +43,8 @@ pub trait MeasureTextEx {
 impl MeasureTextEx for RaylibHandle {}
 
 const VERTEX_RADIUS: f32 = 8.0;
-const CAMERA_POSITION_DEFAULT: Vector3 = Vector3::new(0.0, 0.0, -1300.0);
+const CAMERA_LENGTH_DEFAULT: f32 = 1300.0;
+const CAMERA_FOVY: f32 = 45.0;
 const SAFE_ZONE: f32 = 20.0;
 const UPSCALE: f32 = 2.0;
 
@@ -54,12 +57,7 @@ fn main() {
         is_debugging: false,
         graph: WeightedGraph::new(Vec::new(), Vec::new()),
         route: None,
-        camera: Camera3D::perspective(
-            CAMERA_POSITION_DEFAULT,
-            Vector3::zero(),
-            Vector3::new(0.0, -1.0, 0.0),
-            45.0,
-        ),
+        orbit: Orbiter::new(Vector3::zero(), CAMERA_LENGTH_DEFAULT, 0.0, 0.0),
         tempo: Tempo::new(),
         interactive_targets: Vec::new(),
         is_giving_interactive_targets: false,
@@ -83,8 +81,6 @@ fn main() {
         }
     }
 
-    let mut mouse_tracking;
-
     let (mut rl, thread) = init()
         .title("VotV Route Tool")
         .resizable()
@@ -107,8 +103,6 @@ fn main() {
     let shader_render_width_loc = shader.get_shader_location("renderWidth");
     let shader_render_height_loc = shader.get_shader_location("renderHeight");
 
-    mouse_tracking = rl.get_mouse_position();
-
     'window: while !rl.window_should_close() {
         if rl.is_window_resized() {
             let width = u32::try_from(rl.get_screen_width()).unwrap()*UPSCALE as u32;
@@ -117,21 +111,6 @@ fn main() {
             shader.set_shader_value(shader_render_width_loc, width as f32);
             shader.set_shader_value(shader_render_height_loc, height as f32);
         }
-
-        let hovered_vert = data.graph.verts_iter()
-            .map(|(v, vert)| (v, get_ray_collision_sphere(rl.get_screen_to_world_ray(rl.get_mouse_position(), data.camera), vert.pos, VERTEX_RADIUS)))
-            .filter(|(_, c)| c.hit)
-            .min_by(|(_, c1), (_, c2)| c1.distance.partial_cmp(&c2.distance).expect("vertices should not have `NaN` distance"))
-            .map(|(v, _)| v);
-
-        let mouse_snapped =
-            if let &Some(v) = &hovered_vert {
-                rl.get_world_to_screen(data.graph.vert(v).pos, data.camera)
-            } else {
-                rl.get_mouse_position()
-            };
-
-        mouse_tracking = mouse_tracking.lerp(mouse_snapped, 1.0);
 
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
             cin.unfocus();
@@ -182,18 +161,46 @@ fn main() {
                 cursor_last_toggled = Instant::now();
             }
         } else {
-            const _: () = assert!(CAMERA_POSITION_DEFAULT.z != 0.0, "dividing by zero is bad");
-            let speed = 6.0*data.camera.position.distance_to(data.camera.target)/CAMERA_POSITION_DEFAULT.z.abs();
+            const ROTATE_SPEED: f32 = 1.5; // radians per second
+            const PAN_SPEED: f32 = 0.25; // "screen heights" per second
+
+            let dt = rl.get_frame_time();
+            let screen_height = data.orbit.length*(CAMERA_FOVY.to_radians()*0.5).tan()*2.0;
+            let pan_speed = PAN_SPEED*screen_height*dt;
+            let rot_speed = ROTATE_SPEED*dt;
+
             let north = (rl.is_key_down(KeyboardKey::KEY_W) as i8 - rl.is_key_down(KeyboardKey::KEY_S) as i8) as f32;
             let east  = (rl.is_key_down(KeyboardKey::KEY_D) as i8 - rl.is_key_down(KeyboardKey::KEY_A) as i8) as f32;
-            let up    = (rl.is_key_down(KeyboardKey::KEY_Q) as i8 - rl.is_key_down(KeyboardKey::KEY_E) as i8) as f32;
+            let zoom  = (rl.is_key_down(KeyboardKey::KEY_E) as i8 - rl.is_key_down(KeyboardKey::KEY_Q) as i8) as f32;
             let pitch = (rl.is_key_down(KeyboardKey::KEY_R) as i8 - rl.is_key_down(KeyboardKey::KEY_F) as i8) as f32;
             let yaw   = (rl.is_key_down(KeyboardKey::KEY_X) as i8 - rl.is_key_down(KeyboardKey::KEY_Z) as i8) as f32;
-            let pan = Vector3::new(east, -north, 0.0) * speed;
-            let zoom = Vector3::new(yaw, -pitch, up) * speed;
-            data.camera.position += pan + zoom;
-            data.camera.target += pan;
+
+            let pan = Vector3::new(east, -north, 0.0);
+            data.orbit.target += pan   * pan_speed;
+            data.orbit.length -= zoom  * pan_speed;
+            data.orbit.pitch  -= pitch * rot_speed;
+            data.orbit.yaw    -= yaw   * rot_speed;
         }
+
+        let camera = Camera3D::perspective(
+            data.orbit.position(),
+            data.orbit.target,
+            Vector3::new(0.0, -1.0, 0.0),
+            CAMERA_FOVY,
+        );
+
+        let hovered_vert = data.graph.verts_iter()
+            .map(|(v, vert)| (v, get_ray_collision_sphere(rl.get_screen_to_world_ray(rl.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS)))
+            .filter(|(_, c)| c.hit)
+            .min_by(|(_, c1), (_, c2)| c1.distance.partial_cmp(&c2.distance).expect("vertices should not have `NaN` distance"))
+            .map(|(v, _)| v);
+
+        let mouse_snapped =
+            if let &Some(v) = &hovered_vert {
+                rl.get_world_to_screen(data.graph.vert(v).pos, camera)
+            } else {
+                rl.get_mouse_position()
+            };
 
         if data.is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
             if let Some(v) = hovered_vert {
@@ -251,7 +258,7 @@ fn main() {
             {
                 const SCALE_FACTOR: f32 = 1.0/(10.0*UPSCALE);
                 let mut d = d.begin_mode3D({
-                    let mut camera = data.camera;
+                    let mut camera = camera;
                     camera.target *= SCALE_FACTOR;
                     camera.position *= SCALE_FACTOR;
                     camera
@@ -265,7 +272,7 @@ fn main() {
                 }
 
                 for (v, vert) in data.graph.verts_iter() {
-                    let distance_from_target = vert.pos - data.camera.target;
+                    let distance_from_target = vert.pos - data.orbit.target;
                     let mut color = route.as_ref().and_then(|route| route.classify(&data.graph, v)).map_or(
                         data.verts_color,
                         |c| match c {
@@ -278,7 +285,7 @@ fn main() {
                     );
 
                     if data.is_giving_interactive_targets {
-                        let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), data.camera), vert.pos, VERTEX_RADIUS).hit;
+                        let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS).hit;
                         if is_hovered {
                             color = color.brightness(0.45);
                         }
@@ -309,15 +316,15 @@ fn main() {
                     }
                 }
 
-                d.draw_capsule((data.camera.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (data.camera.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
-                d.draw_capsule((data.camera.target + Vector3::new( 0.0, -5.0, 0.0))*SCALE_FACTOR, (data.camera.target + Vector3::new(0.0, 5.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                d.draw_capsule((data.orbit.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (data.orbit.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                d.draw_capsule((data.orbit.target + Vector3::new( 0.0, -5.0, 0.0))*SCALE_FACTOR, (data.orbit.target + Vector3::new(0.0, 5.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
             }
 
-            d.draw_rectangle_rec(Rectangle::new((mouse_tracking.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_screen_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
-            d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_tracking.y - 1.5)*UPSCALE, d.get_screen_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
+            d.draw_rectangle_rec(Rectangle::new((mouse_snapped.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_screen_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
+            d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_snapped.y - 1.5)*UPSCALE, d.get_screen_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
 
             for (v, vert) in data.graph.verts_iter() {
-                let pos = d.get_world_to_screen(vert.pos, data.camera);
+                let pos = d.get_world_to_screen(vert.pos, camera);
                 let text = vert.alias.as_str();
                 let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
                 d.draw_text_ex(&font, text, (pos - rvec2(text_size.x*0.5, font.baseSize/2))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
@@ -370,7 +377,7 @@ fn main() {
 
             d.draw_text_ex(
                 &font,
-                &format!("x:{}/y:{}", data.camera.target.x, data.camera.target.z),
+                &format!("x:{}/y:{}", data.orbit.target.x, data.orbit.target.z),
                 Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize) as f32 - SAFE_ZONE),
                 font.baseSize as f32,
                 0.0,
@@ -498,6 +505,8 @@ fn main() {
                         d.draw_rectangle_rec(cursor_rec, Color::LIGHTBLUE);
                     }
                 }
+
+                d.draw_fps(0, 0);
             }
         }
     }
