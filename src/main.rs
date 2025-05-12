@@ -10,6 +10,7 @@
     impl_trait_in_assoc_type,
     associated_type_defaults,
     let_chains,
+    iter_intersperse,
 )]
 
 use std::num::NonZeroU128;
@@ -137,7 +138,10 @@ fn main() {
                     std::ops::ControlFlow::Break(result) => {
                         match result {
                             Ok(x) => x.print(&mut cout, &data),
-                            Err(e) => console_log!(cout, Error, "{e}"), // todo: make this recursive
+                            Err(e) => {
+                                let e = &(e as dyn std::error::Error);
+                                console_log!(cout, Error, "{e}"), // todo: make this recursive
+                            }
                         }
                         false
                     }
