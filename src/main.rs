@@ -19,7 +19,7 @@ use camera::Orbiter;
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{Cmd, CmdRunner, Command, ProgramData, Routine};
+use command::{Cmd, CmdRunner, Command, ProgramData, SubRoutine};
 use graph::{VertexID, WeightedGraph};
 use raylib::prelude::*;
 use route::{RouteGenerator, VertexClass, Visit};
@@ -120,7 +120,7 @@ fn main() {
             if cin.is_focused() {
                 // finish giving command
                 if let Some(command) = cin.submit_cmd(&mut cout) {
-                    routines.push(Routine::new(command));
+                    routines.push(SubRoutine::new(command));
                 }
             } else {
                 // begin giving command

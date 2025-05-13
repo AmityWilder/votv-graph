@@ -83,7 +83,7 @@ impl Error for ParseCoordsError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Coords(Vector3);
+pub struct Coords(pub Vector3);
 
 impl FromStr for Coords {
     type Err = ParseCoordsError;
@@ -104,6 +104,13 @@ impl FromStr for Coords {
         let y = it.next().ok_or(ParseCoordsError::Invalid).and_then(|x| x)?;
         let z = if let Some(x) = it.next() { x? } else { 0.0 };
         Ok(Self(Vector3 { x, y, z }))
+    }
+}
+
+impl Display for Coords {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let Self(Vector3 { x, y, z }) = self;
+        write!(f, "x:{x}/y:{y}/z:{z}")
     }
 }
 
@@ -479,6 +486,17 @@ impl std::str::FromStr for RichColor {
                 .ok_or(ParseColorError::UnknownName)
         } else {
             Err(ParseColorError::UnknownSyntax)
+        }
+    }
+}
+
+impl Display for RichColor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let Self(Color { r, g, b, a }) = *self;
+        if a == 255 {
+            write!(f, "rgb({r},{g},{b})")
+        } else {
+            write!(f, "rgba({r},{g},{b},{a})")
         }
     }
 }

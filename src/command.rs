@@ -1,26 +1,10 @@
 use std::{borrow::Cow, collections::VecDeque, ops::ControlFlow, str::FromStr, task::Poll};
 use raylib::prelude::*;
 // use snippet::Snippet;
-use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
+use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{Coords, ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
 
 pub mod snippet;
-// pub mod exec;
-// mod cmd;
-
-trait ParseVert {
-    type Err;
-
-    fn parse_vert(&self, graph: &WeightedGraph) -> Result<VertexID, Self::Err>;
-}
-
-impl ParseVert for str {
-    type Err = CmdError;
-
-    fn parse_vert(&self, graph: &WeightedGraph) -> Result<VertexID, Self::Err> {
-        graph.find_vert(self)
-            .ok_or_else(|| CmdError::VertexDNE(self.to_string()))
-    }
-}
+pub mod types;
 
 /// All information that can be affected by commands
 pub struct ProgramData {
@@ -37,41 +21,52 @@ pub struct ProgramData {
     pub background_color: Color,
 }
 
-enum RoutineActivity {
-    Ongoing(CmdRunner),
-    Finished(Option<CmdRet>),
-}
-
+/// Runs a pipeline of commands in sequence
 pub struct Routine {
-    prev: RoutineActivity,
-    src: VecDeque<Cow<'static, str>>,
+    src: VecDeque<String>,
 }
 
 impl Routine {
     pub fn new(src: &str) -> Self {
+        let src = src
+            .split('|')
+            .map(|s| s.trim().to_string())
+            .rev()
+            .collect();
+
         Self {
-            prev: RoutineActivity::Finished(None),
-            src: src
-                .split('|')
-                .map(|s| Cow::Owned(s.trim().to_string()))
-                .rev()
-                .collect(),
+            curr: None,
+            src,
         }
     }
 
+    fn next(&mut self, prev) -> Option<SubRoutine> {
+        if let Some(line) = self.src.pop_front() {
+            let args = &line
+                .split_whitespace()
+                .map(|s| Cow::Owned(s.to_string()))
+                .chain(prev.into_iter().flat_map(|prev| CmdRunner::into_args(prev, data).into_iter()))
+                .collect::<Vec<_>>()
+                [..];
+
+            match CmdRunner::init(data, args) {
+                Ok(runner) => {
+                    self.prev = RoutineActivity::Ongoing(runner);
+                }
+                Err(e) => break ControlFlow::Break(Err(e)),
+            }
+        }
+    }
+}
+
+/// Runs one possibly async command until finished
+pub struct SubRoutine {
+    current: RoutineActivity,
+}
+
+impl SubRoutine {
     pub fn step(&mut self, cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData) -> ControlFlow<Result<CmdRet, CmdError>> {
         loop {
-            let prev = match &mut self.prev {
-                RoutineActivity::Ongoing(run) => {
-                    match run.step(cout, cin, data) {
-                        Poll::Ready(Ok(ret)) => Some(ret),
-                        Poll::Ready(Err(e)) => break ControlFlow::Break(Err(e)),
-                        Poll::Pending => break ControlFlow::Continue(()),
-                    }
-                }
-                RoutineActivity::Finished(ret) => ret.take(),
-            };
-
             if let Some(line) = self.src.pop_front() {
                 let args = &line
                     .split_whitespace()
@@ -89,6 +84,17 @@ impl Routine {
             } else {
                 break ControlFlow::Break(Ok(prev.expect("should have at least one command")));
             }
+
+            let prev = match &mut self.prev {
+                RoutineActivity::Ongoing(run) => {
+                    match run.step(cout, cin, data) {
+                        Poll::Ready(Ok(ret)) => Some(ret),
+                        Poll::Ready(Err(e)) => break ControlFlow::Break(Err(e)),
+                        Poll::Pending => break ControlFlow::Continue(()),
+                    }
+                }
+                RoutineActivity::Finished(ret) => ret.take(),
+            };
         }
     }
 }
@@ -113,6 +119,12 @@ pub enum Cmd {
     Tempo,
     Skip,
     Take,
+}
+
+impl std::fmt::Display for Cmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.info().input)
+    }
 }
 
 impl FromStr for Cmd {
@@ -143,12 +155,12 @@ impl FromStr for Cmd {
     }
 }
 
-struct UsageInfo {
+pub struct UsageInfo {
     template: &'static str,
     desc: &'static str,
 }
 
-struct BasicInfo {
+pub struct BasicInfo {
     input: &'static str,
     desc: &'static str,
     usage: &'static [UsageInfo],
@@ -238,15 +250,15 @@ impl Cmd {
                 desc: "Set visualizer colors.",
                 usage: &[
                     UsageInfo {
-                        template: "verts #<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>",
+                        template: "verts|v #<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>",
                         desc: "Set the base color used to render all vertices.",
                     },
                     UsageInfo {
-                        template: "edges #<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>",
+                        template: "edges|e #<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>",
                         desc: "Set the base color used to render all edges.",
                     },
                     UsageInfo {
-                        template: "bg #<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>",
+                        template: "background|bg #<HEXCODE>|rgb(<???>,<???>,<???>)|rgba(<???>,<???>,<???>,<???>)|<NAME>",
                         desc: "Set the base color used to render background.",
                     },
                 ],
@@ -470,81 +482,83 @@ impl Cmd {
     }
 }
 
-pub trait Command: Sized {
-    type Ret;
+pub trait Command {
+    type Usage: Usage;
 
-    fn init(data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError>;
-    fn step(&mut self, cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData) -> Poll<Result<Self::Ret, CmdError>>;
-    fn into_args(ret: Self::Ret, data: &ProgramData) -> Vec<Cow<'static, str>>;
-    fn disp(ret: &Self::Ret, cout: &mut ConsoleOut, data: &ProgramData);
+    fn init(cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self::Usage, CmdError>;
+}
+
+pub trait Usage {
+    type Return: Return;
+
+    fn step(&mut self, cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData) -> Poll<Result<Self::Return, CmdError>>;
+}
+
+pub trait Return {
+    fn into_args(self, data: &ProgramData) -> Vec<Cow<'static, str>>;
+    fn disp(self, cout: &mut ConsoleOut, data: &ProgramData);
+}
+
+impl Return for () {
+    #[inline]
+    fn into_args(self, _data: &ProgramData) -> Vec<Cow<'static, str>> {
+        Vec::new()
+    }
+
+    #[inline]
+    fn disp(self, _cout: &mut ConsoleOut, _data: &ProgramData) {}
+}
+
+pub enum CmdStage<U: Usage> {
+    Active(U),
+    Return(U::Return),
 }
 
 pub enum CmdRunner {
-    Help        (CmdHelp),
-    Close       (CmdClose),
-    Cls         (CmdCls),
-    Echo        (CmdEcho),
-    Dbg         (CmdDbg),
-    Focus       (CmdFocus),
-    Color       (CmdColor),
-    SvRoute     (CmdSvRoute),
-    SvRouteAdd  (CmdSvRouteAdd),
-    SvRouteList (CmdSvRouteList),
-    SvRouteClear(CmdSvRouteClear),
-    SvNew       (CmdSvNew),
-    SvEdge      (CmdSvEdge),
-    SvLoad      (CmdSvLoad),
-    SvSave      (CmdSvSave),
-    Tempo       (CmdTempo),
-    Skip        (CmdSkip),
-    Take        (CmdTake),
-}
-
-pub enum CmdRet {
-    Help        (<CmdHelp            as Command>::Ret),
-    Close       (<CmdClose           as Command>::Ret),
-    Cls         (<CmdCls             as Command>::Ret),
-    Echo        (<CmdEcho            as Command>::Ret),
-    Dbg         (<CmdDbg             as Command>::Ret),
-    Focus       (<CmdFocus           as Command>::Ret),
-    Color       (<CmdColor           as Command>::Ret),
-    SvRoute     (<CmdSvRoute         as Command>::Ret),
-    SvRouteAdd  (<CmdSvRouteAdd      as Command>::Ret),
-    SvRouteList (<CmdSvRouteList     as Command>::Ret),
-    SvRouteClear(<CmdSvRouteClear    as Command>::Ret),
-    SvNew       (<CmdSvNew           as Command>::Ret),
-    SvEdge      (<CmdSvEdge          as Command>::Ret),
-    SvLoad      (<CmdSvLoad          as Command>::Ret),
-    SvSave      (<CmdSvSave          as Command>::Ret),
-    Tempo       (<CmdTempo           as Command>::Ret),
-    Skip        (<CmdSkip            as Command>::Ret),
-    Take        (<CmdTake            as Command>::Ret),
+    Help        (CmdStage<CmdHelp        >),
+    Close       (CmdStage<CmdClose       >),
+    Cls         (CmdStage<CmdCls         >),
+    Echo        (CmdStage<CmdEcho        >),
+    Dbg         (CmdStage<CmdDbg         >),
+    Focus       (CmdStage<CmdFocus       >),
+    Color       (CmdStage<CmdColor       >),
+    SvRoute     (CmdStage<CmdSvRoute     >),
+    SvRouteAdd  (CmdStage<CmdSvRouteAdd  >),
+    SvRouteList (CmdStage<CmdSvRouteList >),
+    SvRouteClear(CmdStage<CmdSvRouteClear>),
+    SvNew       (CmdStage<CmdSvNew       >),
+    SvEdge      (CmdStage<CmdSvEdge      >),
+    SvLoad      (CmdStage<CmdSvLoad      >),
+    SvSave      (CmdStage<CmdSvSave      >),
+    Tempo       (CmdStage<CmdTempo       >),
+    Skip        (CmdStage<CmdSkip        >),
+    Take        (CmdStage<CmdTake        >),
 }
 
 impl Command for CmdRunner {
     type Ret = CmdRet;
 
-    fn init(data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if let [cmd, args @ ..] = args {
             Ok(match cmd.parse::<Cmd>()? {
-                Cmd::Help         => Self::Help        (CmdHelp        ::init(data, args)?),
-                Cmd::Close        => Self::Close       (CmdClose       ::init(data, args)?),
-                Cmd::Cls          => Self::Cls         (CmdCls         ::init(data, args)?),
-                Cmd::Echo         => Self::Echo        (CmdEcho        ::init(data, args)?),
-                Cmd::Dbg          => Self::Dbg         (CmdDbg         ::init(data, args)?),
-                Cmd::Focus        => Self::Focus       (CmdFocus       ::init(data, args)?),
-                Cmd::Color        => Self::Color       (CmdColor       ::init(data, args)?),
-                Cmd::SvRoute      => Self::SvRoute     (CmdSvRoute     ::init(data, args)?),
-                Cmd::SvRouteAdd   => Self::SvRouteAdd  (CmdSvRouteAdd  ::init(data, args)?),
-                Cmd::SvRouteList  => Self::SvRouteList (CmdSvRouteList ::init(data, args)?),
-                Cmd::SvRouteClear => Self::SvRouteClear(CmdSvRouteClear::init(data, args)?),
-                Cmd::SvNew        => Self::SvNew       (CmdSvNew       ::init(data, args)?),
-                Cmd::SvEdge       => Self::SvEdge      (CmdSvEdge      ::init(data, args)?),
-                Cmd::SvLoad       => Self::SvLoad      (CmdSvLoad      ::init(data, args)?),
-                Cmd::SvSave       => Self::SvSave      (CmdSvSave      ::init(data, args)?),
-                Cmd::Tempo        => Self::Tempo       (CmdTempo       ::init(data, args)?),
-                Cmd::Skip         => Self::Skip        (CmdSkip        ::init(data, args)?),
-                Cmd::Take         => Self::Take        (CmdTake        ::init(data, args)?),
+                Cmd::Help         => Self::Help        (CmdHelp        ::init(cout, cin, data, args)?),
+                Cmd::Close        => Self::Close       (CmdClose       ::init(cout, cin, data, args)?),
+                Cmd::Cls          => Self::Cls         (CmdCls         ::init(cout, cin, data, args)?),
+                Cmd::Echo         => Self::Echo        (CmdEcho        ::init(cout, cin, data, args)?),
+                Cmd::Dbg          => Self::Dbg         (CmdDbg         ::init(cout, cin, data, args)?),
+                Cmd::Focus        => Self::Focus       (CmdFocus       ::init(cout, cin, data, args)?),
+                Cmd::Color        => Self::Color       (CmdColor       ::init(cout, cin, data, args)?),
+                Cmd::SvRoute      => Self::SvRoute     (CmdSvRoute     ::init(cout, cin, data, args)?),
+                Cmd::SvRouteAdd   => Self::SvRouteAdd  (CmdSvRouteAdd  ::init(cout, cin, data, args)?),
+                Cmd::SvRouteList  => Self::SvRouteList (CmdSvRouteList ::init(cout, cin, data, args)?),
+                Cmd::SvRouteClear => Self::SvRouteClear(CmdSvRouteClear::init(cout, cin, data, args)?),
+                Cmd::SvNew        => Self::SvNew       (CmdSvNew       ::init(cout, cin, data, args)?),
+                Cmd::SvEdge       => Self::SvEdge      (CmdSvEdge      ::init(cout, cin, data, args)?),
+                Cmd::SvLoad       => Self::SvLoad      (CmdSvLoad      ::init(cout, cin, data, args)?),
+                Cmd::SvSave       => Self::SvSave      (CmdSvSave      ::init(cout, cin, data, args)?),
+                Cmd::Tempo        => Self::Tempo       (CmdTempo       ::init(cout, cin, data, args)?),
+                Cmd::Skip         => Self::Skip        (CmdSkip        ::init(cout, cin, data, args)?),
+                Cmd::Take         => Self::Take        (CmdTake        ::init(cout, cin, data, args)?),
             })
         } else {
             Err(CmdError::NoSuchCmd(String::new()))
@@ -629,7 +643,7 @@ enum CmdHelp {
 impl Command for CmdHelp {
     type Ret = String;
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if args.is_empty() {
             Ok(Self::All)
         } else if let [cmd_str] = args {
@@ -660,7 +674,7 @@ struct CmdClose;
 impl Command for CmdClose {
     type Ret = ();
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if args.is_empty() {
             Ok(Self)
         } else {
@@ -687,7 +701,7 @@ struct CmdCls;
 impl Command for CmdCls {
     type Ret = ();
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if args.is_empty() {
             Ok(Self)
         } else {
@@ -715,7 +729,7 @@ struct CmdEcho(Vec<Cow<'static, str>>);
 impl Command for CmdEcho {
     type Ret = Vec<Cow<'static, str>>;
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         Ok(Self(args.to_owned()))
     }
 
@@ -740,7 +754,7 @@ enum CmdDbg {
 impl Command for CmdDbg {
     type Ret = bool;
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if args.is_empty() {
             Ok(Self::Toggle)
         } else if let [new_value_str] = args && let Ok(new_value) = new_value_str.parse::<bool>() {
@@ -783,7 +797,7 @@ enum CmdFocusRet {
 impl Command for CmdFocus {
     type Ret = CmdFocusRet;
 
-    fn init(data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if args.is_empty() {
             Ok(Self::Print)
         } else if let [name] = args {
@@ -855,7 +869,7 @@ enum CmdColorRet {
 impl Command for CmdColor {
     type Ret = CmdColorRet;
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if let [region, color_str] = args {
             let color = color_str
                 .parse::<RichColor>()
@@ -904,25 +918,60 @@ impl Command for CmdColor {
     }
 }
 
-struct CmdSvRoute;
+enum CmdSvRoute {
+    Immediate,
+    Interactive,
+}
 
 impl Command for CmdSvRoute {
-    type Ret = ();
+    type Ret = Vec<VertexID>;
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
-        todo!()
+    fn init(cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+        if let [arg0] = args && matches!(arg0 as &str, "-i" | "interactive") {
+            console_log!(cout, Info,
+                "click each target with the mouse; order doesn't matter except that the first will be the start \n\
+                click a target again to un-target it\n\
+                run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished");
+            cin.insert_over_selection("sv.route");
+            data.is_giving_interactive_targets = true;
+            Ok(CmdSvRoute::Interactive)
+        } else if let [start, targets @ ..] = args && !targets.is_empty() {
+            let start = data.graph.find_vert(start).ok_or(CmdError::VertexDNE(start.to_string()))?;
+            let targets = args.iter()
+                .map(|s| data.graph.find_vert(s).ok_or(CmdError::VertexDNE(s.to_string())))
+                .collect::<Result<Vec<VertexID>, CmdError>>()?;
+
+            data.route = Some(RouteGenerator::new(data.graph.verts().len(), start, targets));
+            console_log!(cout, Info, "generating route...");
+            Ok(CmdSvRoute::Immediate)
+        } else {
+            Err(CmdError::CheckUsage(Cmd::SvRoute))
+        }
     }
 
-    fn step(&mut self, _cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData) -> Poll<Result<Self::Ret, CmdError>> {
-        todo!()
+    fn step(&mut self, cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData) -> Poll<Result<Self::Ret, CmdError>> {
+        if matches!(self, CmdSvRoute::Interactive) && !data.is_giving_interactive_targets {
+            let mut targets = data.interactive_targets[..].into_iter().copied();
+            let start = targets.next().ok_or(CmdError::VertexDNE(String::new()))?; // obviously not a parse error, should be its own error
+            data.route = Some(RouteGenerator::new(data.graph.verts().len(), start, targets));
+            console_log!(cout, Info, "generating route...");
+        }
+
+        if matches!(self, CmdSvRoute::Immediate) && let route = &data.route.as_ref().ok_or(CmdError::NoExistingRoute)? && route.is_finished() {
+            return Poll::Ready(Ok(route.result().to_vec()));
+        }
+
+        Poll::Pending
     }
 
-    fn into_args(_ret: Self::Ret, _data: &ProgramData) -> Vec<Cow<'static, str>> {
-        todo!()
+    fn into_args(ret: Self::Ret, data: &ProgramData) -> Vec<Cow<'static, str>> {
+        ret.into_iter()
+            .map(|id| Cow::Owned(data.graph.vert(id).id.to_string()))
+            .collect()
     }
 
-    fn disp(_ret: &Self::Ret, _cout: &mut ConsoleOut, _data: &ProgramData) {
-        todo!()
+    fn disp(ret: &Self::Ret, cout: &mut ConsoleOut, data: &ProgramData) {
+        console_log!(cout, Info, "{}", ret.iter().copied().map(|id| data.graph.vert(id).id.as_str()).collect::<Vec<_>>().join(" - "))
     }
 }
 
@@ -931,7 +980,7 @@ struct CmdSvRouteAdd;
 impl Command for CmdSvRouteAdd {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -953,7 +1002,7 @@ struct CmdSvRouteList;
 impl Command for CmdSvRouteList {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -975,7 +1024,7 @@ struct CmdSvRouteClear;
 impl Command for CmdSvRouteClear {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -997,7 +1046,7 @@ struct CmdSvNew;
 impl Command for CmdSvNew {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -1019,7 +1068,7 @@ struct CmdSvEdge;
 impl Command for CmdSvEdge {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -1041,7 +1090,7 @@ struct CmdSvLoad;
 impl Command for CmdSvLoad {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -1063,7 +1112,7 @@ struct CmdSvSave;
 impl Command for CmdSvSave {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -1085,7 +1134,7 @@ struct CmdTempo;
 impl Command for CmdTempo {
     type Ret = ();
 
-    fn init(_data: &ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, _args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         todo!()
     }
 
@@ -1107,7 +1156,7 @@ struct CmdSkip(Vec<Cow<'static, str>>);
 impl Command for CmdSkip {
     type Ret = Vec<Cow<'static, str>>;
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if let [n_str, rest @ ..] = args {
             let n = n_str.parse::<usize>().map_err(|e| CmdError::ParseInt(e))?;
             Ok(Self(rest[n.min(rest.len())..].to_vec()))
@@ -1134,7 +1183,7 @@ struct CmdTake(Vec<Cow<'static, str>>);
 impl Command for CmdTake {
     type Ret = Vec<Cow<'static, str>>;
 
-    fn init(_data: &ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
+    fn init(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[Cow<'static, str>]) -> Result<Self, CmdError> {
         if let [n_str, rest @ ..] = args {
             let n = n_str.parse::<usize>().map_err(|e| CmdError::ParseInt(e))?;
             Ok(Self(rest[..n.min(rest.len())].to_vec()))
