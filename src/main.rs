@@ -11,6 +11,7 @@
     associated_type_defaults,
     let_chains,
     iter_intersperse,
+    box_patterns,
 )]
 
 use std::num::NonZeroU128;

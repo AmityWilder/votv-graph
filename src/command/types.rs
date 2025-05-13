@@ -1,14 +1,131 @@
+use crate::graph::VertexID;
 pub use crate::{command::Cmd, types::{Coords, RichColor, Tempo}};
+use std::fmt::Display;
 
-pub mod concept;
-pub mod solid;
+use super::ProgramData;
 
-pub type Text = String;
-pub type Vertex = String;
-pub type Bool = bool;
-pub type Index = usize;
-pub type Scalar = f32;
-pub type Color = RichColor;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Type {
+    Void,
+    Text,
+    Cmd,
+    Vertex,
+    Bool,
+    Index,
+    Scalar,
+    Coords,
+    Color,
+    Tempo,
+    Tuple(Vec<Type>),
+    Enum(Vec<Type>),
+    Array(Box<Type>, (usize, Option<usize>)),
+}
+
+pub enum Value {
+    Void,
+    Text(String),
+    Cmd(Cmd),
+    Vertex(VertexID),
+    Bool(bool),
+    Index(usize),
+    Scalar(f32),
+    Coords(Coords),
+    Color(RichColor),
+    Tempo(Tempo),
+    Array(Vec<Value>),
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Void => Ok(()),
+
+            Self::Text  (inner) => inner.fmt(f),
+            Self::Cmd   (inner) => inner.fmt(f),
+            Self::Vertex(inner) => inner.fmt(f),
+            Self::Bool  (inner) => inner.fmt(f),
+            Self::Index (inner) => inner.fmt(f),
+            Self::Scalar(inner) => inner.fmt(f),
+            Self::Coords(inner) => inner.fmt(f),
+            Self::Color (inner) => inner.fmt(f),
+            Self::Tempo (inner) => inner.fmt(f),
+
+            Self::Array (inner) => {
+                if let [first, rest @ ..] = &inner[..] {
+                    first.fmt(f)?;
+                    for item in rest {
+                        use std::fmt::Write;
+                        f.write_char(' ')?;
+                        item.fmt(f)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn is_between(n: usize, min: usize, max: Option<usize>) -> bool {
+    min <= n && max.is_none_or(|max| n <= max)
+}
+
+impl Value {
+    pub fn coerce_to(self, ty: Type, data: &ProgramData) -> Option<Value> {
+        match (&self, &ty) {
+            // T -> T
+            | (Value::Void,      Type::Void  )
+            | (Value::Text  (_), Type::Text  )
+            | (Value::Cmd   (_), Type::Cmd   )
+            | (Value::Vertex(_), Type::Vertex)
+            | (Value::Bool  (_), Type::Bool  )
+            | (Value::Index (_), Type::Index )
+            | (Value::Scalar(_), Type::Scalar)
+            | (Value::Coords(_), Type::Coords)
+            | (Value::Color (_), Type::Color )
+            | (Value::Tempo (_), Type::Tempo )
+                => Some(self),
+
+            // [T; 0] -> [U; 0..]
+            (Value::Array(v), Type::Array(_, (0, _))) if v.is_empty() => Some(self),
+
+            // [T; 0] -> ()
+            (Value::Array(v), Type::Void) if v.is_empty() => Some(self),
+
+            // [T; l<=n<=h] -> [T; l..=h]
+            (Value::Array(v), &Type::Array(t, (l, h))) if is_between(v.len(), l, h) && v => Some(self),
+
+            // T -> [T; 1..]
+            | (Value::Void,      Type::Array(box Type::Void,   (1, _)))
+            | (Value::Text  (_), Type::Array(box Type::Text,   (1, _)))
+            | (Value::Cmd   (_), Type::Array(box Type::Cmd,    (1, _)))
+            | (Value::Vertex(_), Type::Array(box Type::Vertex, (1, _)))
+            | (Value::Bool  (_), Type::Array(box Type::Bool,   (1, _)))
+            | (Value::Index (_), Type::Array(box Type::Index,  (1, _)))
+            | (Value::Scalar(_), Type::Array(box Type::Scalar, (1, _)))
+            | (Value::Coords(_), Type::Array(box Type::Coords, (1, _)))
+            | (Value::Color (_), Type::Array(box Type::Color,  (1, _)))
+            | (Value::Tempo (_), Type::Array(box Type::Tempo,  (1, _)))
+                => Some(Value::Array(vec![self])),
+
+            // any -> str
+            (_, Type::Text) => Some(Value::Text(self.to_string())),
+
+            // str -> any
+            (Value::Text(s), Type::Void  ) => s.is_empty().then_some(Value::Void),
+            (Value::Text(s), Type::Cmd   ) => s.parse().ok().map(Value::Cmd   ),
+            (Value::Text(s), Type::Vertex) => data.graph.find_vert(&s).map(Value::Vertex),
+            (Value::Text(s), Type::Bool  ) => s.parse().ok().map(Value::Bool  ),
+            (Value::Text(s), Type::Index ) => s.parse().ok().map(Value::Index ),
+            (Value::Text(s), Type::Scalar) => s.parse().ok().map(Value::Scalar),
+            (Value::Text(s), Type::Coords) => s.parse().ok().map(Value::Coords),
+            (Value::Text(s), Type::Color ) => s.parse().ok().map(Value::Color ),
+            (Value::Text(s), Type::Tempo ) => s.parse().ok().map(Value::Tempo ),
+
+            _ => None,
+        }
+    }
+}
+
 
 
 // #[derive(Clone, PartialEq, Eq, Hash)]
