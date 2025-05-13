@@ -19,7 +19,7 @@ use camera::Orbiter;
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{Cmd, ProgramData, Routine};
+use command::{Cmd, CmdRunner, Command, ProgramData, Routine};
 use graph::{VertexID, WeightedGraph};
 use raylib::prelude::*;
 use route::{RouteGenerator, VertexClass, Visit};
@@ -137,10 +137,13 @@ fn main() {
                     std::ops::ControlFlow::Continue(()) => true,
                     std::ops::ControlFlow::Break(result) => {
                         match result {
-                            Ok(x) => x.print(&mut cout, &data),
+                            Ok(x) => CmdRunner::disp(&x, &mut cout, &data),
                             Err(e) => {
-                                let e = &(e as dyn std::error::Error);
-                                console_log!(cout, Error, "{e}"), // todo: make this recursive
+                                let mut err = Some(&e as &dyn std::error::Error);
+                                while let Some(e) = err {
+                                    console_log!(cout, Error, "{e}");
+                                    err = e.source();
+                                }
                             }
                         }
                         false
