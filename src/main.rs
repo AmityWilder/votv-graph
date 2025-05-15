@@ -60,7 +60,7 @@ fn main() {
         is_debugging: false,
         graph: WeightedGraph::new(Vec::new(), Vec::new()),
         route: None,
-        orbit: Orbiter::new(Vector3::zero(), CAMERA_LENGTH_DEFAULT, 0.0, 0.0),
+        orbit: Orbiter::default(),
         tempo: Tempo::new(),
         interactive_targets: Vec::new(),
         is_giving_interactive_targets: false,

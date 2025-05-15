@@ -1,5 +1,7 @@
 use raylib::prelude::*;
 
+use crate::CAMERA_LENGTH_DEFAULT;
+
 pub struct Orbiter {
     pub target: Vector3,
     pub length: f32,
@@ -7,6 +9,17 @@ pub struct Orbiter {
     pub pitch: f32,
     /// Horizontal
     pub yaw: f32,
+}
+
+impl Default for Orbiter {
+    fn default() -> Self {
+        Self {
+            target: Vector3::zero(),
+            length: CAMERA_LENGTH_DEFAULT,
+            pitch: 0.0,
+            yaw: 0.0,
+        }
+    }
 }
 
 impl Orbiter {
