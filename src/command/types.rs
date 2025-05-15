@@ -1,11 +1,26 @@
 use crate::graph::VertexID;
-pub use crate::{command::Cmd, types::{Coords, RichColor, Tempo}};
+pub use crate::{command::{Cmd, ProgramData}, types::{Coords, RichColor, Tempo}};
 use std::fmt::Display;
 
-use super::ProgramData;
+#[derive(Debug, Clone, Copy)]
+pub struct SizeHint {
+    pub low: usize,
+    pub high: Option<usize>,
+}
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl SizeHint {
+    #[inline]
+    pub const fn contains(&self, n: usize) -> bool {
+        self.low <= n && match self.high {
+            Some(high) => n <= high,
+            None => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub enum Type {
+    #[default]
     Void,
     Text,
     Cmd,
@@ -17,11 +32,13 @@ pub enum Type {
     Color,
     Tempo,
     Tuple(Vec<Type>),
-    Enum(Vec<Type>),
-    Array(Box<Type>, (usize, Option<usize>)),
+    Union(Vec<Type>),
+    Array(Box<Type>, SizeHint),
 }
 
+#[derive(Debug, Clone, Default)]
 pub enum Value {
+    #[default]
     Void,
     Text(String),
     Cmd(Cmd),
@@ -65,64 +82,134 @@ impl Display for Value {
     }
 }
 
-fn is_between(n: usize, min: usize, max: Option<usize>) -> bool {
-    min <= n && max.is_none_or(|max| n <= max)
-}
-
 impl Value {
-    pub fn coerce_to(self, ty: Type, data: &ProgramData) -> Option<Value> {
-        match (&self, &ty) {
-            // T -> T
-            | (Value::Void,      Type::Void  )
-            | (Value::Text  (_), Type::Text  )
-            | (Value::Cmd   (_), Type::Cmd   )
-            | (Value::Vertex(_), Type::Vertex)
-            | (Value::Bool  (_), Type::Bool  )
-            | (Value::Index (_), Type::Index )
-            | (Value::Scalar(_), Type::Scalar)
-            | (Value::Coords(_), Type::Coords)
-            | (Value::Color (_), Type::Color )
-            | (Value::Tempo (_), Type::Tempo )
-                => Some(self),
+    /// Same type without coercion
+    pub fn is_type(&self, t: &Type) -> bool {
+        match t {
+            // T == T
+            Type::Void   => matches!(self, Value::Void),
+            Type::Text   => matches!(self, Value::Text  (_)),
+            Type::Cmd    => matches!(self, Value::Cmd   (_)),
+            Type::Vertex => matches!(self, Value::Vertex(_)),
+            Type::Bool   => matches!(self, Value::Bool  (_)),
+            Type::Index  => matches!(self, Value::Index (_)),
+            Type::Scalar => matches!(self, Value::Scalar(_)),
+            Type::Coords => matches!(self, Value::Coords(_)),
+            Type::Color  => matches!(self, Value::Color (_)),
+            Type::Tempo  => matches!(self, Value::Tempo (_)),
 
-            // [T; 0] -> [U; 0..]
-            (Value::Array(v), Type::Array(_, (0, _))) if v.is_empty() => Some(self),
+            // T == T|U|V
+            Type::Union(ts) => ts.iter().any(|t| self.is_type(t)),
 
-            // [T; 0] -> ()
-            (Value::Array(v), Type::Void) if v.is_empty() => Some(self),
+            // [T; l<=n<=h] == [T; l..=h]
+            Type::Array(t, size) => {
+                if let Value::Array(items) = self {
+                    size.contains(items.len()) &&
+                        items.iter().all(|item| item.is_type(t))
+                } else { false }
+            }
 
-            // [T; l<=n<=h] -> [T; l..=h]
-            (Value::Array(v), &Type::Array(t, (l, h))) if is_between(v.len(), l, h) && v => Some(self),
-
-            // T -> [T; 1..]
-            | (Value::Void,      Type::Array(box Type::Void,   (1, _)))
-            | (Value::Text  (_), Type::Array(box Type::Text,   (1, _)))
-            | (Value::Cmd   (_), Type::Array(box Type::Cmd,    (1, _)))
-            | (Value::Vertex(_), Type::Array(box Type::Vertex, (1, _)))
-            | (Value::Bool  (_), Type::Array(box Type::Bool,   (1, _)))
-            | (Value::Index (_), Type::Array(box Type::Index,  (1, _)))
-            | (Value::Scalar(_), Type::Array(box Type::Scalar, (1, _)))
-            | (Value::Coords(_), Type::Array(box Type::Coords, (1, _)))
-            | (Value::Color (_), Type::Array(box Type::Color,  (1, _)))
-            | (Value::Tempo (_), Type::Array(box Type::Tempo,  (1, _)))
-                => Some(Value::Array(vec![self])),
-
-            // any -> str
-            (_, Type::Text) => Some(Value::Text(self.to_string())),
-
-            // str -> any
-            (Value::Text(s), Type::Void  ) => s.is_empty().then_some(Value::Void),
-            (Value::Text(s), Type::Cmd   ) => s.parse().ok().map(Value::Cmd   ),
-            (Value::Text(s), Type::Vertex) => data.graph.find_vert(&s).map(Value::Vertex),
-            (Value::Text(s), Type::Bool  ) => s.parse().ok().map(Value::Bool  ),
-            (Value::Text(s), Type::Index ) => s.parse().ok().map(Value::Index ),
-            (Value::Text(s), Type::Scalar) => s.parse().ok().map(Value::Scalar),
-            (Value::Text(s), Type::Coords) => s.parse().ok().map(Value::Coords),
-            (Value::Text(s), Type::Color ) => s.parse().ok().map(Value::Color ),
-            (Value::Text(s), Type::Tempo ) => s.parse().ok().map(Value::Tempo ),
-
-            _ => None,
+            // (T, U, V) == (T, U, V)
+            Type::Tuple(ts) => {
+                if let Value::Array(items) = self {
+                    ts.len() == items.len() &&
+                        ts.iter().zip(items.iter()).all(|(t, item)| item.is_type(t))
+                } else { false }
+            }
         }
+    }
+
+    fn coerce_parse(s: &str, t: &Type, data: &ProgramData) -> Option<Value> {
+        match t {
+            // "" -> ()
+            Type::Void => s.is_empty().then_some(Value::Void),
+
+            // str -> str (should normally be handled by `coerce_to`, but just in case...)
+            Type::Text => Some(Value::Text(s.to_string())),
+
+            // str -> T
+            Type::Cmd    => s.parse().ok().map(Value::Cmd   ),
+            Type::Bool   => s.parse().ok().map(Value::Bool  ),
+            Type::Index  => s.parse().ok().map(Value::Index ),
+            Type::Scalar => s.parse().ok().map(Value::Scalar),
+            Type::Coords => s.parse().ok().map(Value::Coords),
+            Type::Color  => s.parse().ok().map(Value::Color ),
+            Type::Tempo  => s.parse().ok().map(Value::Tempo ),
+
+            // "<ID or alias>" -> VertexID
+            Type::Vertex => data.graph.find_vert(&s).map(Value::Vertex),
+
+            // "<T str> <U str> <V str>" -> (T, U, V)
+            Type::Tuple(ts) => {
+                let mut s_it = s.split_whitespace();
+                let mut t_it = ts.iter();
+                let mut items = Vec::with_capacity(ts.len());
+                loop {
+                    let (s, t) = (s_it.next(), t_it.next());
+                    if let (Some(s), Some(t)) = (s, t) {
+                        items.push(Self::coerce_parse(s, t, data)?);
+                    } else {
+                        break (t.is_none() && s.is_none()).then_some(Value::Array(items));
+                    }
+                }
+            }
+
+            Type::Union(ts) => {
+                if ts.iter().any(|t| matches!(t, Type::Text)) {
+                    // str -> T|str|U
+                    Some(Value::Text(s.to_string()))
+                } else {
+                    // coerse to *which* variant?
+                    None
+                }
+            }
+
+            Type::Array(t, size) => {
+                let mut s_it = s.split_whitespace();
+                let n = s_it.clone().count();
+                if size.contains(n) {
+                    let mut items = Vec::with_capacity(n);
+                    while let Some(s) = s_it.next() {
+                        items.push(Self::coerce_parse(s, t, data)?);
+                    }
+                    // "<T str> <T str> <T str> ..." -> [T; ..n..]
+                    Some(Value::Array(items))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    pub fn coerce_to(mut self, t: &Type, data: &ProgramData) -> Option<Value> {
+        let new_value = if self.is_type(t) {
+            // T -> T
+            Some(self)
+        } else if let Value::Array(items) = &mut self && matches!(t, Type::Void) && items.is_empty() {
+            // [T; 0] -> ()
+            Some(Value::Void)
+        } else if let Type::Array(_, size) = t && size.contains(0) && matches!(self, Value::Void) {
+            // () -> [T; 0..]
+            Some(Value::Array(Vec::new()))
+        } else if let Value::Array(items) = &mut self && let [item] = &items[..] && item.is_type(t) {
+            // [T; 1] -> T
+            Some(items.pop().expect("should be guarded by `[item] = &items[..]`"))
+        } else if let Type::Array(t, size) = t && size.contains(1) && self.is_type(t) {
+            // T -> [T; ..1..]
+            Some(Value::Array(vec![self]))
+        } else if matches!(t, Type::Text) {
+            // T -> str
+            Some(Value::Text(self.to_string()))
+        } else if let Value::Text(s) = self {
+            // str -> T
+            Self::coerce_parse(&s, t, data)
+        } else {
+            None
+        };
+
+        debug_assert!(new_value.as_ref().is_none_or(|value| value.is_type(t)), "type coercion should produce the 'into' type");
+
+        new_value
     }
 }
 

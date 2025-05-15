@@ -208,7 +208,7 @@ impl Display for Tempo {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct RichColor(pub Color);
 
 impl RichColor {
