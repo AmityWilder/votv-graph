@@ -1,5 +1,5 @@
 use std::{str::FromStr, ops::Range};
-use crate::graph::{Edge, Vertex, VertexID, WeightedGraph};
+use crate::graph::{Edge, Vertex, VertexID, VertexIDError, WeightedGraph};
 use raylib::prelude::*;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -75,7 +75,7 @@ pub enum LoadGraphErrorKind {
     Unexpected,
     ParseInt(std::num::ParseIntError),
     ParseFloat(std::num::ParseFloatError),
-    UsizeToVertexID(std::num::TryFromIntError),
+    UsizeToVertexID(VertexIDError),
 }
 use LoadGraphErrorKind::*;
 
@@ -122,7 +122,7 @@ impl LoadGraphError {
     fn parse_float<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, e: std::num::ParseFloatError) -> Self {
         Self::new(Source::new(line, substr, code), ParseFloat(e))
     }
-    fn usize_to_vertex_id<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, e: std::num::TryFromIntError) -> Self {
+    fn usize_to_vertex_id<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, e: VertexIDError) -> Self {
         Self::new(Source::new(line, substr, code), UsizeToVertexID(e))
     }
 }
@@ -218,12 +218,10 @@ fn find_vert<'a, 'src: 'a>(
     line: usize,
     code: &'src str,
     s: &'a str,
-) -> Result<VertexID, LoadGraphError> {
+) -> Result<usize, LoadGraphError> {
     verts.iter()
         .position(|v| v.alias.as_str() == s || v.id.as_str() == s)
-            .ok_or_else(|| LoadGraphError::unknown_vertex(line, s, code))?
-        .try_into()
-            .map_err(|e| LoadGraphError::usize_to_vertex_id(line, s, code, e))
+        .ok_or_else(|| LoadGraphError::unknown_vertex(line, s, code))
 }
 
 fn pos_component<'a, 'src: 'a>(
@@ -248,16 +246,16 @@ fn parse_edge<'a, 'src: 'a>(
     let mut weight_str;
     (b, weight_str) = b.split_once(':').unwrap_or((b, ""));
 
-    let adj = [
-        find_vert(&verts, line, code, a.trim())?,
-        find_vert(&verts, line, code, b.trim())?,
-    ];
+    let adj_str = [a, b].map(str::trim);
+
+    let adj = adj_str.try_map(|s| Ok((s, find_vert(&verts, line, code, s.trim())?)))?;
 
     weight_str = weight_str.trim();
     let weight_start = weight_str.chars().next();
     let weight =
         if weight_start.is_none_or(|ch| matches!(ch, '*'|'+')) {
-            let distance = verts[adj[0] as usize].pos.distance_to(verts[adj[1] as usize].pos);
+            let [(_, a), (_, b)] = adj;
+            let distance = verts[a].pos.distance_to(verts[b].pos);
             if let Some(ch) = weight_start {
                 weight_str = weight_str[1..].trim_start();
                 let weight_aug = weight_str.parse::<f32>()
@@ -275,7 +273,13 @@ fn parse_edge<'a, 'src: 'a>(
                 .map_err(|e| LoadGraphError::parse_float(line, weight_str, code, e))?
         };
 
-    Ok(Edge { adj, weight })
+    Ok(Edge {
+        adj: adj.try_map(|(substr, n)|
+            VertexID::from_usize(n, &verts[n])
+                .map_err(|e| LoadGraphError::usize_to_vertex_id(line, substr, code, e))
+        )?,
+        weight,
+    })
 }
 
 struct VertCreation<'a, 'src: 'a> {
@@ -418,8 +422,8 @@ impl WeightedGraph {
 
     pub fn save_to_memory(&self) -> String {
         std::iter::once(format!("v{CURRENT_VERSION}"))
-            .chain(self.verts().into_iter().map(|v| format!("{}:{}={},{},{}", &v.id, &v.alias, v.pos.x, v.pos.y, v.pos.z)))
-            .chain(self.edges().into_iter().map(|e| {
+            .chain(self.verts_iter().map(|(_, v)| format!("{}:{}={},{},{}", &v.id, &v.alias, v.pos.x, v.pos.y, v.pos.z)))
+            .chain(self.edges_iter().map(|e| {
                 fn shorter<'a>(str1: &'a str, str2: &'a str) -> &'a str {
                     if str1.len() < str2.len() { str1 } else { str2 }
                 }

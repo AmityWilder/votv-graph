@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ops::Range, time::{Duration, Instant}};
 use raylib::prelude::*;
-use crate::{command::Cmd, console_log};
+use crate::console_log;
 
 use KeyboardKey::*;
 

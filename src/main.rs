@@ -12,6 +12,7 @@
     let_chains,
     iter_intersperse,
     box_patterns,
+    array_try_map,
 )]
 
 use std::num::NonZeroU128;
@@ -20,7 +21,7 @@ use camera::Orbiter;
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{Cmd, CmdRunner, Command, ProgramData, SubRoutine};
+use command::{Cmd, ProgramData, Routine};
 use graph::{VertexID, WeightedGraph};
 use raylib::prelude::*;
 use route::{RouteGenerator, VertexClass, Visit};
@@ -70,7 +71,7 @@ fn main() {
     };
 
     // ongoing simultaneous routines
-    let mut routines = Vec::new();
+    let mut routines = Vec::<Routine>::new();
 
     let mut is_cursor_shown = false;
     let mut cursor_last_toggled = Instant::now();
@@ -121,7 +122,7 @@ fn main() {
             if cin.is_focused() {
                 // finish giving command
                 if let Some(command) = cin.submit_cmd(&mut cout) {
-                    routines.push(SubRoutine::new(command));
+                    // routines.push(SubRoutine::new(command));
                 }
             } else {
                 // begin giving command
@@ -133,24 +134,24 @@ fn main() {
 
         // tick routines
         {
-            routines.retain_mut(|routine| {
-                match routine.step(&mut cout, &mut cin, &mut data) {
-                    std::ops::ControlFlow::Continue(()) => true,
-                    std::ops::ControlFlow::Break(result) => {
-                        match result {
-                            Ok(x) => CmdRunner::disp(&x, &mut cout, &data),
-                            Err(e) => {
-                                let mut err = Some(&e as &dyn std::error::Error);
-                                while let Some(e) = err {
-                                    console_log!(cout, Error, "{e}");
-                                    err = e.source();
-                                }
-                            }
-                        }
-                        false
-                    }
-                }
-            });
+            // routines.retain_mut(|routine| {
+            //     match routine.step(&mut cout, &mut cin, &mut data) {
+            //         std::ops::ControlFlow::Continue(()) => true,
+            //         std::ops::ControlFlow::Break(result) => {
+            //             match result {
+            //                 Ok(x) => CmdRunner::disp(&x, &mut cout, &data),
+            //                 Err(e) => {
+            //                     let mut err = Some(&e as &dyn std::error::Error);
+            //                     while let Some(e) = err {
+            //                         console_log!(cout, Error, "{e}");
+            //                         err = e.source();
+            //                     }
+            //                 }
+            //             }
+            //             false
+            //         }
+            //     }
+            // });
 
             if data.should_close {
                 break 'window;
@@ -272,7 +273,7 @@ fn main() {
                     camera
                 });
 
-                for edge in data.graph.edges() {
+                for edge in data.graph.edges_iter() {
                     let [i, j] = edge.adj;
                     let p0 = data.graph.vert(i).pos;
                     let p1 = data.graph.vert(j).pos;
