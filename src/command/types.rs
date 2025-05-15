@@ -1,7 +1,7 @@
 // use raylib::prelude::*;
-use crate::{graph::VertexID, types::{ParseColorError, ParseCoordsError, ParseTempoError}};
-pub use crate::{command::{Cmd, ProgramData}, types::{Coords, RichColor, Tempo}};
-use std::{ops::RangeBounds, str::FromStr};
+use crate::{types::{ParseColorError, ParseCoordsError, ParseTempoError}};
+pub use crate::{command::Cmd, types::{Coords, RichColor, Tempo}};
+use std::str::FromStr;
 
 use super::CmdError;
 
@@ -84,55 +84,6 @@ impl SizeHint {
     }
 }
 
-// #[derive(Debug, Clone, Copy)]
-// pub struct Interval<T> {
-//     pub lower: std::ops::Bound<T>,
-//     pub upper: std::ops::Bound<T>,
-// }
-
-// impl<T: Clone> From<std::ops::RangeInclusive<T>> for Interval<T> {
-//     fn from(value: std::ops::RangeInclusive<T>) -> Self {
-//         Self {
-//             lower: value.start_bound().cloned(),
-//             upper: value.end_bound().cloned(),
-//         }
-//     }
-// }
-// impl<T: Clone> From<std::ops::RangeFrom<T>> for Interval<T> {
-//     fn from(value: std::ops::RangeFrom<T>) -> Self {
-//         Self {
-//             lower: value.start_bound().cloned(),
-//             upper: value.end_bound().cloned(),
-//         }
-//     }
-// }
-// impl<T: Clone> From<std::ops::RangeToInclusive<T>> for Interval<T> {
-//     fn from(value: std::ops::RangeToInclusive<T>) -> Self {
-//         Self {
-//             lower: value.start_bound().cloned(),
-//             upper: value.end_bound().cloned(),
-//         }
-//     }
-// }
-// impl<T> From<std::ops::RangeFull> for Interval<T> {
-//     fn from(_value: std::ops::RangeFull) -> Self {
-//         Self {
-//             lower: std::ops::Bound::Unbounded,
-//             upper: std::ops::Bound::Unbounded,
-//         }
-//     }
-// }
-
-// impl<T> std::ops::RangeBounds<T> for Interval<T> {
-//     fn start_bound(&self) -> std::ops::Bound<&T> {
-//         self.lower.as_ref()
-//     }
-
-//     fn end_bound(&self) -> std::ops::Bound<&T> {
-//         self.upper.as_ref()
-//     }
-// }
-
 #[derive(Debug)]
 pub enum BoundsError {
     FailCondition(String),
@@ -165,17 +116,17 @@ pub enum Bounds {
 impl PartialEq for Bounds {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Text   { pred: l_pred, .. }, Self::Text   { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Cmd    { pred: l_pred, .. }, Self::Cmd    { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Vertex { pred: l_pred, .. }, Self::Vertex { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Bool   { pred: l_pred, .. }, Self::Bool   { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Count  { pred: l_pred, .. }, Self::Count  { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Amount { pred: l_pred, .. }, Self::Amount { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Coords { pred: l_pred, .. }, Self::Coords { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Color  { pred: l_pred, .. }, Self::Color  { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Tempo  { pred: l_pred, .. }, Self::Tempo  { pred: r_pred, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Tuple  { pred: l_pred, ts: l_ts, .. }, Self::Tuple  { pred: r_pred, ts: r_ts, .. }) => l_ts == r_ts && std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Union  { pred: l_pred, ts: l_ts, .. }, Self::Union  { pred: r_pred, ts: r_ts, .. }) => l_ts == r_ts && std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Text   { pred: l_pred,                       .. }, Self::Text   { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Cmd    { pred: l_pred,                       .. }, Self::Cmd    { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Vertex { pred: l_pred,                       .. }, Self::Vertex { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Bool   { pred: l_pred,                       .. }, Self::Bool   { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Count  { pred: l_pred,                       .. }, Self::Count  { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Amount { pred: l_pred,                       .. }, Self::Amount { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Coords { pred: l_pred,                       .. }, Self::Coords { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Color  { pred: l_pred,                       .. }, Self::Color  { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Tempo  { pred: l_pred,                       .. }, Self::Tempo  { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
+            (Self::Tuple  { pred: l_pred, ts: l_ts,             .. }, Self::Tuple  { pred: r_pred, ts: r_ts,             .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred) && l_ts == r_ts,
+            (Self::Union  { pred: l_pred, ts: l_ts,             .. }, Self::Union  { pred: r_pred, ts: r_ts,             .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred) && l_ts == r_ts,
             (Self::Array  { pred: l_pred, t: l_t, size: l_size, .. }, Self::Array  { pred: r_pred, t: r_t, size: r_size, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred) && l_size == r_size && l_t == r_t,
             _ => false,
         }
@@ -533,13 +484,13 @@ impl Value {
         let result = match t {
             // "" -> ()
             Type::Void => s.is_empty().then_some(Value::Void)
-                .ok_or_else(|| CoerceError::Incompatible { expect: t.clone(), actual: Type::Literal(s) }),
+                .ok_or_else(|| CoerceError::Incompatible { expect: t.clone(), actual: Type::Text }),
 
             // str -> str
             // (should normally be handled by `coerce_to`, but just in case...)
             Type::Text => Ok(Value::Text(s.to_string())),
             Type::Literal(lit) => (s == *lit).then_some(Value::Lit(lit))
-                .ok_or_else(|| CoerceError::Incompatible { expect: t.clone(), actual: Type::Literal(s) }),
+                .ok_or_else(|| CoerceError::Incompatible { expect: t.clone(), actual: Type::Text }),
 
             // str -> T
             Type::Bool   => s.parse().map_err(|e| CoerceError::ParseBool  (e)).map(Value::Bool  ),
@@ -579,26 +530,26 @@ impl Value {
                 }
             }
 
-            Type::Array(t, size) => {
+            Type::Array(shared_t, size) => {
                 let mut s_it = s.split_whitespace();
                 let n = s_it.clone().count();
                 if size.contains(n) {
                     let mut items = Vec::with_capacity(n);
                     while let Some(s) = s_it.next() {
-                        items.push(Self::coerce_parse(s, t)?);
+                        items.push(Self::coerce_parse(s, shared_t)?);
                     }
                     // "<T str> <T str> <T str> ...{n}" where l<=n<=h -> [T; l..=h]
                     Ok(Value::Multi(items))
                 } else {
-                    None
+                    Err(CoerceError::Incompatible { expect: t.clone(), actual: s.parse::<Value>().unwrap().get_type() })
                 }
             }
 
             Type::Bounded(bound) => Self::coerce_parse(s, &bound.inner_type())
-                .and_then(|value| value.bounds_test(bound)),
+                .and_then(|value| value.bounds_test(bound).map(|()| value)),
         };
 
-        debug_assert!(result.as_ref().is_none_or(|value| value.is_type(t)), "type coercion should produce the 'into' type");
+        debug_assert!(result.is_err() || result.as_ref().is_ok_and(|value| value.is_type(t)), "type coercion should produce the 'into' type");
 
         result
     }
@@ -628,12 +579,12 @@ impl Value {
                 // str -> T
                 Self::coerce_parse(&s, t)
             } else if let Type::Bounded(bound) = t {
-                self.coerce_to(&bound.inner_type()).and_then(|value| value.bounds_test(bound))
+                self.coerce_to(&bound.inner_type()).and_then(|value| value.bounds_test(bound).map(|()| value))
             } else {
-                Err(CoerceError::Incompatible { expect: t, actual: self.get_type() })
+                Err(CoerceError::Incompatible { expect: t.clone(), actual: self.get_type() })
             };
 
-            if result.as_ref().is_some_and(|value| !value.is_type(t)) {
+            if result.as_ref().is_ok_and(|value| !value.is_type(t)) {
                 self = result.unwrap();
                 assert!(loop_count < 32, "coercion overflow, possible loop");
                 loop_count += 1;
@@ -643,7 +594,7 @@ impl Value {
             }
         };
 
-        debug_assert!(new_value.as_ref().is_none_or(|value| value.is_type(t)), "type coercion should produce the 'into' type");
+        debug_assert!(new_value.is_err() || new_value.as_ref().is_ok_and(|value| value.is_type(t)), "type coercion should produce the 'into' type");
 
         new_value
     }
@@ -688,31 +639,7 @@ impl Value {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, sync::LazyLock};
-    use raylib::prelude::*;
-    use crate::{camera::Orbiter, graph::{Vertex, WeightedGraph}};
     use super::*;
-
-    static DATA: LazyLock<ProgramData> = LazyLock::new(|| ProgramData {
-        graph: WeightedGraph::new(
-            std::iter::once(Vertex {
-                id: "Foxtrot".to_string(),
-                alias: "F".to_string(),
-                pos: Vector3::default(),
-            }),
-            Vec::new(),
-        ),
-        route: None,
-        is_debugging: false,
-        orbit: Orbiter::new(Vector3::zero(), 1.0, 0.0, 0.0),
-        tempo: Tempo::new(),
-        interactive_targets: Vec::new(),
-        is_giving_interactive_targets: false,
-        should_close: false,
-        verts_color: Color::default(),
-        edges_color: Color::default(),
-        background_color: Color::default(),
-    });
 
     #[test]
     fn test_coercion() {
@@ -720,7 +647,7 @@ mod tests {
         assert!(value.is_type(&Type::Tuple(vec![Type::Text, Type::Color, Type::Color, Type::Coords, Type::Text, Type::Color])));
         let new_type: Type = Type::Tuple(vec![Type::Literal("squeak"), Type::Color, Type::Color, Type::Coords, Type::Literal("apple"), Type::Color]);
         let new_value = value.coerce_to(&new_type);
-        assert!(new_value.is_some_and(|x| x.is_type(&new_type)));
+        assert!(new_value.as_ref().is_ok_and(|x| x.is_type(&new_type)), "{:?}", new_value.unwrap_err());
     }
 
     #[test]
@@ -729,9 +656,9 @@ mod tests {
         assert!(value.is_type(&Type::Text));
         let new_type: Type = Type::Bounded(Bounds::Text {
             cond: |x| format!("{x} does not end with 'e'"),
-            pred: |s| if s.ends_with('e') { Err(format!("{s:?} ends with 'e'")) } else { Ok(()) },
+            pred: |s| if !s.ends_with('e') { Err(BoundsError::FailCondition(format!("{s:?} ends with 'e'"))) } else { Ok(()) },
         });
         let new_value = value.coerce_to(&new_type);
-        assert!(new_value.is_some_and(|x| x.is_type(&new_type)));
+        assert!(new_value.as_ref().is_ok_and(|x| x.is_type(&new_type)), "{:?}", new_value.unwrap_err());
     }
 }
