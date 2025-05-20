@@ -1,3 +1,6 @@
+[workspace]
+members = ["graph_dsl"]
+
 [package]
 name = "votv-graph"
 version = "0.1.0"
@@ -5,3 +8,4 @@ edition = "2024"
 
 [dependencies]
 raylib = "5.5.1"
+graph_dsl = { path = "graph_dsl" }
