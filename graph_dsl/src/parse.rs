@@ -109,38 +109,6 @@ pub fn tokenize(src: &str) -> Vec<Token<'_>> {
         .collect()
 }
 
-pub struct Sequence<T, S> {
-    items: Vec<T>,
-    separators: Vec<S>,
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for Sequence<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut f = f.debug_struct("Sequence");
-        for pair in self.0.chunks(2) {
-            f.field("item", &pair[0]);
-            if let Some(sep) = pair.get(1) {
-                f.field("separator", sep);
-            }
-        }
-        f.finish()
-    }
-}
-
-impl<T> Sequence<T> {
-    pub const fn new() -> Self {
-        Self(Vec::new())
-    }
-
-    pub fn items(&self) -> &[T] {
-        &self.items
-    }
-
-    pub fn separators(&self) -> &[T] {
-        &self.items
-    }
-}
-
 #[derive(Debug)]
 pub struct Field<'a> {
     field: Token<'a>,
@@ -156,8 +124,14 @@ pub enum SyntaxNode<'a> {
         items: Vec<SyntaxNode<'a>>,
         close: Token<'a>,
     },
-    Sequence(Sequence<SyntaxNode<'a>>),
-    Struct(Vec<Field<'a>>),
+    Sequence {
+        items: Vec<SyntaxNode<'a>>,
+        separators: Vec<Token<'a>>,
+    },
+    Struct {
+        items: Vec<Field<'a>>,
+        separators: Vec<Token<'a>>,
+    },
 }
 
 #[derive(Debug)]
