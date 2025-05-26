@@ -13,6 +13,8 @@
     iter_intersperse,
     box_patterns,
     array_try_map,
+    pattern,
+    slice_as_array,
 )]
 
 use std::num::NonZeroU128;

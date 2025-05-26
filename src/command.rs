@@ -6,6 +6,7 @@ use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, co
 
 pub mod snippet;
 pub mod types;
+pub mod lex;
 
 /// All information that can be affected by commands
 pub struct ProgramData {

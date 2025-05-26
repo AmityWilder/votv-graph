@@ -1,5 +1,5 @@
 [workspace]
-members = ["graph_dsl"]
+members = ["graph_dsl", "normal_float"]
 
 [package]
 name = "votv-graph"
@@ -8,4 +8,4 @@ edition = "2024"
 
 [dependencies]
 raylib = "5.5.1"
-graph_dsl = { path = "graph_dsl" }
+# graph_dsl = { path = "graph_dsl" }
