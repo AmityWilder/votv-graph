@@ -136,6 +136,105 @@ pub fn lex(src: &str) -> Lexer<'_> {
     Lexer { src }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct AdjTokens<'a>([Token<'a>]);
+
+impl<'a> std::ops::Deref for AdjTokens<'a> {
+    type Target = [Token<'a>];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> AdjTokens<'a> {
+    /// # Safety
+    ///
+    /// - The `src` field of every token must immediately follow that of the previous element.
+    /// - Elements cannot be modified for the lifetime of of this object.
+    /// - Every element must be valid.
+    #[inline]
+    const unsafe fn new_unchecked<'b>(tokens: &'b [Token<'a>]) -> &'b Self {
+        // SAFETY: AdjTokens is just a wrapper of [Token<'a>],
+        // therefore converting &[Token<'a>] to &AdjTokens is safe.
+        unsafe { &*(tokens as *const [Token<'a>] as *const Self) }
+    }
+
+    /// Return the concatenation of every token's `src` in the object.
+    /// Returns [`None`] if the slice is empty.
+    #[inline]
+    pub const fn to_str(&self) -> Option<&'a str> {
+        if let Some(first) = self.0.first() {
+            unsafe {
+                // the existence of a first element guarantees the existence of a last element (they would be the same element).
+                let last = self.0.last().unwrap_unchecked();
+                let start = first.src.as_ptr();
+                // "Allocated objects can never be larger than `isize::MAX` bytes, so if the computed offset
+                // stays in bounds of the allocated object, it is guaranteed to satisfy the first requirement.
+                // This implies, for instance, that `vec.as_ptr().add(vec.len())` (for `vec: Vec<T>`) is always
+                // safe." --std::ptr::add documentation
+                let end = last.src.as_ptr().add(std::mem::size_of_val(last.src));
+                // if the safety of the constructor is upheld, `end` is guaranteed to come after `start`.
+                let len = end.offset_from_unsigned(start);
+                // if the safety of the constructor is upheld, every src is guaranteed to be valid and consecutive in memory.
+                let bytes = std::slice::from_raw_parts(start, len);
+                // because the source is a str, its elements are guaranteed to be valid utf8.
+                let s = str::from_utf8_unchecked(bytes);
+                Some(s)
+            }
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdjChunks<'a, 'b> {
+    tokens: &'b [Token<'a>],
+}
+
+impl<'a, 'b> AdjChunks<'a, 'b> {
+    fn new(tokens: &'b [Token<'a>]) -> Self {
+        Self { tokens }
+    }
+}
+
+impl<'a, 'b> Iterator for AdjChunks<'a, 'b> {
+    type Item = &'b AdjTokens<'a>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut it = self.tokens
+            .iter()
+            .map(|token| token.src.as_bytes().as_ptr_range());
+
+        if let Some(mut prev) = it.next() {
+            let mut mid = 1;
+            for curr in it {
+                assert!(prev.end <= curr.start);
+                if prev.end == curr.start {
+                    mid += 1;
+                    prev = curr;
+                } else {
+                    break;
+                }
+            }
+
+            let (front, back) = self.tokens.split_at(mid);
+            self.tokens = back;
+            // Safety: Just confirmed the tokens are consecutive
+            let chunk = unsafe { AdjTokens::new_unchecked(front) };
+            Some(chunk)
+        } else {
+            None
+        }
+    }
+}
+
+impl std::iter::FusedIterator for AdjChunks<'_, '_> {}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplitArgs<'a, 'b> {
     tokens: &'b [Token<'a>],
@@ -195,16 +294,27 @@ impl<'a, 'b> Iterator for SplitArgs<'a, 'b> {
 
 impl std::iter::FusedIterator for SplitArgs<'_, '_> {}
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum Pipeline<'a, 'b> {
-    Separator(&'b Token<'a>),
-    Item(SplitArgs<'a, 'b>),
+pub trait TokenSliceExt<'a> {
+    fn adj_chunks<'b>(&'b self) -> AdjChunks<'a, 'b>;
+    fn split_args<'b>(&'b self) -> SplitArgs<'a, 'b>;
+}
+
+impl<'a> TokenSliceExt<'a> for [Token<'a>] {
+    #[inline]
+    fn adj_chunks<'b>(&'b self) -> AdjChunks<'a, 'b> {
+        AdjChunks::new(self)
+    }
+
+    #[inline]
+    fn split_args<'b>(&'b self) -> SplitArgs<'a, 'b> {
+        SplitArgs::new(self)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Syntax<'a, 'b> {
     tokens: &'b [Token<'a>],
-    sep: Option<&'b Token<'a>>,
+    sep: Option<&'b [Token<'a>]>,
 }
 
 impl<'a, 'b> Syntax<'a, 'b> {
@@ -214,18 +324,18 @@ impl<'a, 'b> Syntax<'a, 'b> {
 }
 
 impl<'a, 'b> Iterator for Syntax<'a, 'b> {
-    type Item = Pipeline<'a, 'b>;
+    type Item = &'b [Token<'a>];
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(sep) = self.sep.take() {
-            return Some(Pipeline::Separator(sep));
+            return Some(sep);
         } else if self.tokens.is_empty() {
             return None;
         }
 
         let front = if let Some(mid) = self.tokens.iter().position(|tkn| tkn.eq_punc('|')) {
             let front = &self.tokens[..mid];
-            self.sep = Some(&self.tokens[mid]);
+            self.sep = Some(&self.tokens[mid..mid + 1]);
             self.tokens = &self.tokens[mid + 1..];
             front
         } else {
@@ -234,7 +344,7 @@ impl<'a, 'b> Iterator for Syntax<'a, 'b> {
             front
         };
 
-        Some(Pipeline::Item(SplitArgs::new(front)))
+        Some(front)
     }
 }
 
@@ -387,7 +497,8 @@ mod tests {
         fn test_lone_ident_is_cmd() {
             let tokens = lex("apple").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[Token::ident("apple")][..]));
                 assert_eq!(args.next(), None);
             });
@@ -398,12 +509,14 @@ mod tests {
         fn test_pipeline() {
             let tokens = lex("apple | orange").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[Token::ident("apple")][..]));
                 assert_eq!(args.next(), None);
             });
-            assert_eq!(it.next(), Some(Pipeline::Separator(const { &Token::punc("|", '|') })));
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_eq!(it.next(), Some(&[Token::punc("|", '|')][..]));
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[Token::ident("orange")][..]));
                 assert_eq!(args.next(), None);
             });
@@ -414,7 +527,8 @@ mod tests {
         fn test_command_with_dots() {
             let tokens = lex("apple.orange.banana").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
@@ -431,7 +545,8 @@ mod tests {
         fn test_command_exclude_trailing_dots() {
             let tokens = lex("apple.orange.").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
@@ -447,7 +562,8 @@ mod tests {
         fn test_command_split_empty_dot() {
             let tokens = lex("apple.orange..banana").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
@@ -465,7 +581,8 @@ mod tests {
         fn test_command_split_dotless_ident() {
             let tokens = lex("apple.orange banana").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
@@ -481,7 +598,8 @@ mod tests {
         fn test_struct() {
             let tokens = lex("x:4/y:6/z:1 apple orange").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("x"),
                     Token::punc(":", ':'),
@@ -506,7 +624,8 @@ mod tests {
         fn test_struct_keep_trailing() {
             let tokens = lex("x:4/y:6/ apple orange").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("x"),
                     Token::punc(":", ':'),
@@ -528,7 +647,8 @@ mod tests {
         fn test_struct_keep_trailing_field() {
             let tokens = lex("x:4/y: apple orange").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("x"),
                     Token::punc(":", ':'),
@@ -548,7 +668,8 @@ mod tests {
         fn test_group_rgb() {
             let tokens = lex("rgb(43, 22, 54) apple").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+            assert_syntax!(it.next(), Some(args), {
+                let mut args = args.split_args();
                 assert_eq!(args.next(), Some(&[
                     Token::ident("rgb"),
                     Token::punc("(", '('),
