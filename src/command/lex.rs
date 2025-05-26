@@ -1,4 +1,4 @@
-use std::str::pattern::{Pattern, SearchStep, Searcher};
+use std::str::pattern::{Pattern, Searcher};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
@@ -195,24 +195,53 @@ impl<'a, 'b> Iterator for SplitArgs<'a, 'b> {
 
 impl std::iter::FusedIterator for SplitArgs<'_, '_> {}
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Pipeline<'a, 'b> {
     Separator(&'b Token<'a>),
     Item(SplitArgs<'a, 'b>),
 }
 
-pub fn syntax<'a, 'b>(tokens: &'b [Token<'a>]) -> impl Iterator<Item = Pipeline<'a, 'b>> {
-    tokens
-        .split_inclusive(|tkn| tkn.eq_punc('|'))
-        .flat_map(|mut tokens| {
-            let sep = tokens
-                .last().is_some_and(|tkn| tkn.eq_punc('|'))
-                .then(|| Pipeline::Separator(tokens.split_off_last().unwrap()));
+#[derive(Debug, Clone)]
+pub struct Syntax<'a, 'b> {
+    tokens: &'b [Token<'a>],
+    sep: Option<&'b Token<'a>>,
+}
 
-            let item = Some(Pipeline::Item(SplitArgs::new(tokens)));
+impl<'a, 'b> Syntax<'a, 'b> {
+    fn new(tokens: &'b [Token<'a>]) -> Self {
+        Self { tokens, sep: None }
+    }
+}
 
-            [item, sep].into_iter().filter_map(|x| x)
-        })
+impl<'a, 'b> Iterator for Syntax<'a, 'b> {
+    type Item = Pipeline<'a, 'b>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(sep) = self.sep.take() {
+            return Some(Pipeline::Separator(sep));
+        } else if self.tokens.is_empty() {
+            return None;
+        }
+
+        let front = if let Some(mid) = self.tokens.iter().position(|tkn| tkn.eq_punc('|')) {
+            let front = &self.tokens[..mid];
+            self.sep = Some(&self.tokens[mid]);
+            self.tokens = &self.tokens[mid + 1..];
+            front
+        } else {
+            let (front, back) = self.tokens.split_at(self.tokens.len());
+            self.tokens = back;
+            front
+        };
+
+        Some(Pipeline::Item(SplitArgs::new(front)))
+    }
+}
+
+impl std::iter::FusedIterator for Syntax<'_, '_> {}
+
+pub fn syntax<'a, 'b>(tokens: &'b [Token<'a>]) -> Syntax<'a, 'b> {
+    Syntax::new(tokens)
 }
 
 #[cfg(test)]
