@@ -157,7 +157,13 @@ impl<'a, 'b> Iterator for SplitArgs<'a, 'b> {
                 if a.eq_punc('#') {
                     // hex code
                     len = 2;
-                } else if b.eq_punc(':') {
+                } else if a.is_ident() && b.eq_punc('.') {
+                    len = 1 + self.tokens[1..]
+                        .chunks_exact(2)
+                        .map(|x| [x[0], x[1]])
+                        .take_while(|[a, b]| a.eq_punc('.') && b.is_ident())
+                        .count()*2;
+                } else if a.is_ident() && b.eq_punc(':') {
                     // struct
                     len = (0..4)
                         .cycle()
@@ -192,10 +198,7 @@ impl std::iter::FusedIterator for SplitArgs<'_, '_> {}
 #[derive(Debug, PartialEq)]
 pub enum Pipeline<'a, 'b> {
     Separator(&'b Token<'a>),
-    Item {
-        cmd: &'b [Token<'a>],
-        args: SplitArgs<'a, 'b>,
-    },
+    Item(SplitArgs<'a, 'b>),
 }
 
 pub fn syntax<'a, 'b>(tokens: &'b [Token<'a>]) -> impl Iterator<Item = Pipeline<'a, 'b>> {
@@ -206,28 +209,9 @@ pub fn syntax<'a, 'b>(tokens: &'b [Token<'a>]) -> impl Iterator<Item = Pipeline<
                 .last().is_some_and(|tkn| tkn.eq_punc('|'))
                 .then(|| Pipeline::Separator(tokens.split_off_last().unwrap()));
 
-            let item = {
-                let mut mid = 0;
-                let mut it = tokens.iter();
-                if let Some(tkn) = it.next() {
-                    if tkn.is_ident() {
-                        mid += 1;
-                        while let Ok([sep, item]) = it.next_chunk::<2>() {
-                            if sep.eq_punc('.') && item.is_ident() {
-                                mid += 2;
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
+            let item = Some(Pipeline::Item(SplitArgs::new(tokens)));
 
-                let (cmd, args) = tokens.split_at(mid);
-
-                Pipeline::Item { cmd, args: SplitArgs::new(args) }
-            };
-
-            [Some(item), sep].into_iter().filter_map(|x| x)
+            [item, sep].into_iter().filter_map(|x| x)
         })
 }
 
@@ -374,8 +358,8 @@ mod tests {
         fn test_lone_ident_is_cmd() {
             let tokens = lex("apple").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item { cmd, mut args }), {
-                assert_eq!(cmd, &[Token::ident("apple")][..]);
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[Token::ident("apple")][..]));
                 assert_eq!(args.next(), None);
             });
             assert!(it.next().is_none());
@@ -385,13 +369,13 @@ mod tests {
         fn test_pipeline() {
             let tokens = lex("apple | orange").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item { cmd, mut args }), {
-                assert_eq!(cmd, &[Token::ident("apple")][..]);
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[Token::ident("apple")][..]));
                 assert_eq!(args.next(), None);
             });
             assert_eq!(it.next(), Some(Pipeline::Separator(const { &Token::punc("|", '|') })));
-            assert_syntax!(it.next(), Some(Pipeline::Item { cmd, mut args }), {
-                assert_eq!(cmd, &[Token::ident("orange")][..]);
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[Token::ident("orange")][..]));
                 assert_eq!(args.next(), None);
             });
             assert!(it.next().is_none());
@@ -401,14 +385,14 @@ mod tests {
         fn test_command_with_dots() {
             let tokens = lex("apple.orange.banana").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item { cmd, mut args }), {
-                assert_eq!(cmd, &[
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
                     Token::ident("orange"),
                     Token::punc(".", '.'),
                     Token::ident("banana"),
-                ][..]);
+                ][..]));
                 assert_eq!(args.next(), None);
             });
             assert!(it.next().is_none());
@@ -418,12 +402,12 @@ mod tests {
         fn test_command_exclude_trailing_dots() {
             let tokens = lex("apple.orange.").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item { cmd, mut args }), {
-                assert_eq!(cmd, &[
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
                     Token::ident("orange"),
-                ][..]);
+                ][..]));
                 assert_eq!(args.next(), Some(&[Token::punc(".", '.')][..]));
                 assert_eq!(args.next(), None);
             });
@@ -434,12 +418,12 @@ mod tests {
         fn test_command_split_empty_dot() {
             let tokens = lex("apple.orange..banana").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item { cmd, mut args }), {
-                assert_eq!(cmd, &[
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
                     Token::ident("orange"),
-                ][..]);
+                ][..]));
                 assert_eq!(args.next(), Some(&[Token::punc(".", '.')][..]));
                 assert_eq!(args.next(), Some(&[Token::punc(".", '.')][..]));
                 assert_eq!(args.next(), Some(&[Token::ident("banana")][..]));
@@ -452,13 +436,101 @@ mod tests {
         fn test_command_split_dotless_ident() {
             let tokens = lex("apple.orange banana").collect::<Vec<Token>>();
             let mut it = syntax(&tokens);
-            assert_syntax!(it.next(), Some(Pipeline::Item { cmd, mut args }), {
-                assert_eq!(cmd, &[
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
                     Token::ident("apple"),
                     Token::punc(".", '.'),
                     Token::ident("orange"),
-                ][..]);
+                ][..]));
                 assert_eq!(args.next(), Some(&[Token::ident("banana")][..]));
+                assert_eq!(args.next(), None);
+            });
+            assert!(it.next().is_none());
+        }
+
+        #[test]
+        fn test_struct() {
+            let tokens = lex("x:4/y:6/z:1 apple orange").collect::<Vec<Token>>();
+            let mut it = syntax(&tokens);
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
+                    Token::ident("x"),
+                    Token::punc(":", ':'),
+                    Token::number("4"),
+                    Token::punc("/", '/'),
+                    Token::ident("y"),
+                    Token::punc(":", ':'),
+                    Token::number("6"),
+                    Token::punc("/", '/'),
+                    Token::ident("z"),
+                    Token::punc(":", ':'),
+                    Token::number("1"),
+                ][..]));
+                assert_eq!(args.next(), Some(&[Token::ident("apple")][..]));
+                assert_eq!(args.next(), Some(&[Token::ident("orange")][..]));
+                assert_eq!(args.next(), None);
+            });
+            assert!(it.next().is_none());
+        }
+
+        #[test]
+        fn test_struct_keep_trailing() {
+            let tokens = lex("x:4/y:6/ apple orange").collect::<Vec<Token>>();
+            let mut it = syntax(&tokens);
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
+                    Token::ident("x"),
+                    Token::punc(":", ':'),
+                    Token::number("4"),
+                    Token::punc("/", '/'),
+                    Token::ident("y"),
+                    Token::punc(":", ':'),
+                    Token::number("6"),
+                    Token::punc("/", '/'),
+                    Token::ident("apple"),
+                ][..]));
+                assert_eq!(args.next(), Some(&[Token::ident("orange")][..]));
+                assert_eq!(args.next(), None);
+            });
+            assert!(it.next().is_none());
+        }
+
+        #[test]
+        fn test_struct_keep_trailing_field() {
+            let tokens = lex("x:4/y: apple orange").collect::<Vec<Token>>();
+            let mut it = syntax(&tokens);
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
+                    Token::ident("x"),
+                    Token::punc(":", ':'),
+                    Token::number("4"),
+                    Token::punc("/", '/'),
+                    Token::ident("y"),
+                    Token::punc(":", ':'),
+                    Token::ident("apple"),
+                ][..]));
+                assert_eq!(args.next(), Some(&[Token::ident("orange")][..]));
+                assert_eq!(args.next(), None);
+            });
+            assert!(it.next().is_none());
+        }
+
+        #[test]
+        fn test_group_rgb() {
+            let tokens = lex("rgb(43, 22, 54) apple").collect::<Vec<Token>>();
+            let mut it = syntax(&tokens);
+            assert_syntax!(it.next(), Some(Pipeline::Item(mut args)), {
+                assert_eq!(args.next(), Some(&[
+                    Token::ident("rgb"),
+                    Token::punc("(", '('),
+                    Token::number("43"),
+                    Token::punc(",", ','),
+                    Token::number("22"),
+                    Token::punc(",", ','),
+                    Token::number("54"),
+                    Token::punc(")", ')'),
+                ][..]));
+                assert_eq!(args.next(), Some(&[Token::ident("apple")][..]));
                 assert_eq!(args.next(), None);
             });
             assert!(it.next().is_none());
