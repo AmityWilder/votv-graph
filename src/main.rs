@@ -79,7 +79,7 @@ fn main() {
     let mut cursor_last_toggled = Instant::now();
 
     {
-        let default_graph = WeightedGraph::load_from_memory(include_str!("resources/votv.graph"));
+        let default_graph = WeightedGraph::load_from_memory(include_str!("assets/votv.graph"));
         match default_graph {
             Ok(g) => data.graph = g,
             Err(e) => console_log!(cout, Error, "error loading hard-coded map: {e}"),
@@ -98,13 +98,13 @@ fn main() {
     rl.set_target_fps(60);
     rl.set_exit_key(None);
 
-    let font = rl.load_font_from_memory(&thread, ".ttf", include_bytes!("resources/ShareTechMono-Regular.ttf"), 16, None).unwrap();
+    let font = rl.load_font_from_memory(&thread, ".ttf", include_bytes!("assets/ShareTechMono-Regular.ttf"), 16, None).unwrap();
     let mut framebuffer = rl.load_render_texture(
         &thread,
         rl.get_screen_width().try_into().unwrap(),
         rl.get_screen_height().try_into().unwrap(),
     ).unwrap();
-    let mut shader = rl.load_shader_from_memory(&thread, None, Some(include_str!("resources/screen.frag")));
+    let mut shader = rl.load_shader_from_memory(&thread, None, Some(include_str!("assets/screen.frag")));
     let shader_render_width_loc = shader.get_shader_location("renderWidth");
     let shader_render_height_loc = shader.get_shader_location("renderHeight");
 
