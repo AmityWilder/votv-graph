@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use crate::command::{lex::AdjTokens, Cmd};
-use super::{CoerceArg, Coercion, Const, Ranged, RetBounds, SizeHint, Type, TypeBounds};
+use super::{CoerceArg, Coercion, RetBounds, SizeHint, Type, TypeBounds};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Signature {
@@ -90,9 +90,9 @@ const CMD_SKIP_SIG: [Signature; 1] = [
                             .map(|chunk| TypeBounds::array(chunk[0], SizeHint::new_range(0, Some(chunk.len()))))
                             .collect(),
 
-                    [Type::Ranged(Ranged::Count(_opts)), _rest @ ..] => todo!("waiting to see if this ever comes up"),
+                    [Type::RangedCount(_opts), _rest @ ..] => todo!("waiting to see if this ever comes up"),
 
-                    [Type::Const(Const::Count(n)), rest @ ..] => {
+                    [Type::ConstCount(n), rest @ ..] => {
                         let mut n = *n;
                         rest.chunk_by(|a, b| a == b)
                             .filter_map(|chunk| {
@@ -129,9 +129,9 @@ const CMD_TAKE_SIG: [Signature; 1] = [
                             .map(|chunk| TypeBounds::array(chunk[0], SizeHint::new_range(0, Some(chunk.len()))))
                             .collect(),
 
-                    [Type::Ranged(Ranged::Count(_opts)), _rest @ ..] => todo!("waiting to see if this ever comes up"),
+                    [Type::RangedCount(_opts), _rest @ ..] => todo!("waiting to see if this ever comes up"),
 
-                    [Type::Const(Const::Count(n)), rest @ ..] => {
+                    [Type::ConstCount(n), rest @ ..] => {
                         let mut n = *n;
                         rest.chunk_by(|a, b| a == b)
                             .filter_map(|chunk| {
@@ -290,7 +290,7 @@ mod test {
     fn test1() {
         let tokens = lex("sv.route").collect::<Vec<Token>>();
         let it = tokens.adj_chunks().map(|x| Argument::Given(x));
-        assert_eq!(Cmd::Help.signature().select(it), Some((&CMD_HELP_SIG[1], (true, [Type::Const(Const::Cmd(Cmd::SvRoute))].to_vec()))));
+        assert_eq!(Cmd::Help.signature().select(it), Some((&CMD_HELP_SIG[1], (true, [Type::ConstCmd(Cmd::SvRoute)].to_vec()))));
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod test {
         assert_eq!(Cmd::Echo.signature().select(it), Some((&CMD_ECHO_SIG[0], (true, [
             Type::Text,
             Type::Text,
-            Type::Const(Const::Count(52)),
+            Type::ConstCount(52),
             Type::Text,
             Type::Text,
         ].to_vec()))));
@@ -312,7 +312,7 @@ mod test {
         let it = tokens.adj_chunks().map(|x| Argument::Given(x));
         let sig = Cmd::Take.signature().select(it);
         assert_eq!(sig, Some((&CMD_TAKE_SIG[0], (true, [
-            Type::Const(Const::Count(3)),
+            Type::ConstCount(3),
             Type::Text,
             Type::Text,
             Type::Text,

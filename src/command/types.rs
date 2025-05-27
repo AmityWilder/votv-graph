@@ -87,70 +87,10 @@ impl SizeHint {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct UsizeSet([std::ops::RangeInclusive<usize>]);
-
-impl UsizeSet {
-    #[inline]
-    pub const fn new(inner: &[std::ops::RangeInclusive<usize>]) -> &Self {
-        // SAFETY: UsizeSet is a transparent wrapper
-        unsafe { &*(inner as *const [std::ops::RangeInclusive<usize>] as *const Self) }
-    }
-
-    #[inline]
-    pub fn min(&self) -> usize {
-        self.0.iter()
-            .map(|range| *range.end())
-            .max()
-            .expect("RangedType must have at least one range")
-    }
-
-    #[inline]
-    pub fn max(&self) -> usize {
-        self.0.iter()
-            .map(|range| *range.end())
-            .max()
-            .expect("RangedType must have at least one range")
-    }
-
-    #[inline]
-    pub fn contains(&self, n: usize) -> bool {
-        self.0.iter()
-            .any(|range| range.contains(&n))
-    }
-
-    #[inline]
-    pub fn is_superset_of(&self, n: &Self) -> bool {
-        n.0.iter()
-            .all(|sub_range| {
-                self.0.iter()
-                    .any(|range| range.start() <= sub_range.start() && sub_range.end() <= range.end())
-            })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ranged {
-    Text(&'static [&'static str]),
-    Cmd(&'static [Cmd]),
-    Count(&'static UsizeSet),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Const {
-    Text(&'static str),
-    Cmd(Cmd),
-    Count(usize),
-    Bool(bool),
-    Color(Color),
-    Coords(Vector3),
-    Tempo(Tempo),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Type {
     Any,
+
     Text,
     Cmd,
     Count,
@@ -158,8 +98,18 @@ pub enum Type {
     Color,
     Coords,
     Tempo,
-    Ranged(Ranged),
-    Const(Const),
+
+    RangedText(&'static [&'static str]),
+    RangedCmd(&'static [Cmd]),
+    RangedCount(SizeHint),
+
+    ConstText(&'static str),
+    ConstCmd(Cmd),
+    ConstCount(usize),
+    ConstBool(bool),
+    ConstColor(Color),
+    ConstCoords(Vector3),
+    ConstTempo(Tempo),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -406,7 +356,7 @@ fn coerse_count(tokens: &AdjTokens<'_>) -> Coercion<Type> {
     if let [tkn] = tokens as &[Token] {
         if tkn.is_number() {
             return Always(if let Ok(n) = tkn.src.parse() {
-                Type::Const(Const::Count(n))
+                Type::ConstCount(n)
             } else {
                 Type::Count
             });
@@ -426,53 +376,53 @@ where
 
 #[inline]
 fn coerse_cmd(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |x| Type::Const(Const::Cmd(x)))
+    coerce_from_str(tokens, |x| Type::ConstCmd(x))
 }
 
 #[inline]
 fn coerse_bool(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |b| Type::Const(Const::Bool(b)))
+    coerce_from_str(tokens, |b| Type::ConstBool(b))
 }
 
 #[inline]
 fn coerse_color(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |RichColor(x)| Type::Const(Const::Color(x)))
+    coerce_from_str(tokens, |RichColor(x)| Type::ConstColor(x))
 }
 
 #[inline]
 fn coerse_coords(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |Coords(x)| Type::Const(Const::Coords(x)))
+    coerce_from_str(tokens, |Coords(x)| Type::ConstCoords(x))
 }
 
 #[inline]
 fn coerse_tempo(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |x| Type::Const(Const::Tempo(x)))
+    coerce_from_str(tokens, |x| Type::ConstTempo(x))
 }
 
 fn coerce_any(tokens: &AdjTokens<'_>) -> Coercion<Type> {
     if let [tkn] = tokens as &[Token] {
         if tkn.is_number() {
             return Always(if let Ok(n) = tkn.src.parse() {
-                Type::Const(Const::Count(n))
+                Type::ConstCount(n)
             } else {
                 Type::Count
             });
         } else if tkn.is_ident() {
             if let Ok(x) = tkn.src.parse() {
-                return Always(Type::Const(Const::Bool(x)));
+                return Always(Type::ConstBool(x));
             }
         }
     }
 
     let s = tokens.to_str();
     if let Ok(x) = s.parse() {
-        Always(Type::Const(Const::Cmd(x)))
+        Always(Type::ConstCmd(x))
     } else if let Ok(RichColor(x)) = s.parse() {
-        Always(Type::Const(Const::Color(x)))
+        Always(Type::ConstColor(x))
     } else if let Ok(Coords(x)) = s.parse() {
-        Always(Type::Const(Const::Coords(x)))
+        Always(Type::ConstCoords(x))
     } else if let Ok(x) = s.parse() {
-        Always(Type::Const(Const::Tempo(x)))
+        Always(Type::ConstTempo(x))
     } else {
         Always(Type::Text)
     }
@@ -490,39 +440,35 @@ impl CoerceArg for AdjTokens<'_> {
             Type::Coords => coerse_coords(self),
             Type::Tempo => coerse_tempo(self),
 
-            Type::Ranged(t) => match t {
-                Ranged::Text(opts) => {
-                    let s = self.to_str();
-                    opts.iter()
-                        .find(|&&opt| opt == s)
-                        .then_always(|&opt| Type::Const(Const::Text(opt)))
-                },
-                Ranged::Cmd(opts) => {
-                    self.to_str()
-                        .parse().ok()
-                        .filter(|c| opts.contains(&c))
-                        .then_always(|c| Type::Const(Const::Cmd(c)))
-                },
-                Ranged::Count(_ranges) => todo!(),
+            Type::RangedText(opts) => {
+                let s = self.to_str();
+                opts.iter()
+                    .find(|&&opt| opt == s)
+                    .then_always(|&opt| Type::ConstText(opt))
             },
+            Type::RangedCmd(opts) => {
+                self.to_str()
+                    .parse().ok()
+                    .filter(|c| opts.contains(&c))
+                    .then_always(|c| Type::ConstCmd(c))
+            },
+            Type::RangedCount(_ranges) => todo!(),
 
-            Type::Const(v) => match v {
-                Const::Text(v) => matches!(self as &[Token], [tkn] if tkn.is_str() && tkn.src == *v),
-                Const::Cmd(v) => self.to_str().parse().ok().is_some_and(|c: Cmd| c == *v),
-                Const::Count(v) => if let [tkn] = self as &[Token] {
-                    tkn.is_number() && tkn.src.parse().is_ok_and(|n: usize| n == *v)
-                } else {
-                    false
-                },
-                Const::Bool(v) => if let [tkn] = self as &[Token] {
-                    matches!((v, tkn.src), (true, "true"|"1") | (false, "false"|"0"))
-                } else {
-                    false
-                },
-                Const::Color(v)  => self.to_str().parse().ok().is_some_and(|RichColor(x)| &x == v),
-                Const::Coords(v) => self.to_str().parse().ok().is_some_and(|Coords(x)| &x == v),
-                Const::Tempo(v)  => self.to_str().parse().ok().is_some_and(|x: Tempo| &x == v),
-            }.then_always(|| *into)
+            Type::ConstText(v) => matches!(self as &[Token], [tkn] if tkn.is_str() && tkn.src == *v).then_always(|| *into),
+            Type::ConstCmd(v) => self.to_str().parse().ok().is_some_and(|c: Cmd| c == *v).then_always(|| *into),
+            Type::ConstCount(v) => if let [tkn] = self as &[Token] {
+                tkn.is_number() && tkn.src.parse().is_ok_and(|n: usize| n == *v)
+            } else {
+                false
+            }.then_always(|| *into),
+            Type::ConstBool(v) => if let [tkn] = self as &[Token] {
+                matches!((v, tkn.src), (true, "true"|"1") | (false, "false"|"0"))
+            } else {
+                false
+            }.then_always(|| *into),
+            Type::ConstColor(v)  => self.to_str().parse().ok().is_some_and(|RichColor(x)| &x == v).then_always(|| *into),
+            Type::ConstCoords(v) => self.to_str().parse().ok().is_some_and(|Coords(x)| &x == v).then_always(|| *into),
+            Type::ConstTempo(v)  => self.to_str().parse().ok().is_some_and(|x: Tempo| &x == v).then_always(|| *into),
         }
     }
 }
@@ -533,16 +479,16 @@ impl CoerceArg for Type {
 
         match (into, self) {
             | (Type::Any, _)
-            | (Type::Text, Self::Text | Self::Ranged(Ranged::Text(_)) | Self::Const(Const::Text(_)))
-            | (Type::Cmd, Self::Cmd | Self::Ranged(Ranged::Cmd(_)) | Self::Const(Const::Cmd(_)))
-            | (Type::Count, Self::Count | Self::Ranged(Ranged::Count(_)) | Self::Const(Const::Count(_)))
-            | (Type::Bool, Self::Bool | Self::Const(Const::Bool(_)))
-            | (Type::Color, Self::Color | Self::Const(Const::Color(_)))
-            | (Type::Coords, Self::Coords | Self::Const(Const::Coords(_)))
-            | (Type::Tempo, Self::Tempo | Self::Const(Const::Tempo(_)))
-            | (Type::Ranged(Ranged::Text(_)), Self::Text)
-            | (Type::Ranged(Ranged::Cmd(_)), Self::Cmd)
-            | (Type::Ranged(Ranged::Count(_)), Self::Count)
+            | (Type::Text, Self::Text | Self::RangedText(_) | Self::ConstText(_))
+            | (Type::Cmd, Self::Cmd | Self::RangedCmd(_) | Self::ConstCmd(_))
+            | (Type::Count, Self::Count | Self::RangedCount(_) | Self::ConstCount(_))
+            | (Type::Bool, Self::Bool | Self::ConstBool(_))
+            | (Type::Color, Self::Color | Self::ConstColor(_))
+            | (Type::Coords, Self::Coords | Self::ConstCoords(_))
+            | (Type::Tempo, Self::Tempo | Self::ConstTempo(_))
+            | (Type::RangedText(_), Self::Text)
+            | (Type::RangedCmd(_), Self::Cmd)
+            | (Type::RangedCount(_), Self::Count)
                 => Always(*self),
 
             // todo
