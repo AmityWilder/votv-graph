@@ -140,6 +140,18 @@ pub fn lex(src: &str) -> Lexer<'_> {
 #[repr(transparent)]
 pub struct AdjTokens<'a>([Token<'a>]);
 
+impl<'a> ToOwned for AdjTokens<'a> {
+    type Owned = Box<Self>;
+
+    #[inline]
+    fn to_owned(&self) -> Self::Owned {
+        let inner = Box::into_raw(self.0.to_owned().into_boxed_slice());
+        // SAFETY: AdjTokens is just a wrapper of [Token<'a>],
+        // therefore converting Box<[Token<'a>]> to Box<AdjTokens> is safe.
+        unsafe { Box::from_raw(inner as *mut [Token<'a>] as *mut Self) }
+    }
+}
+
 impl<'a> std::ops::Deref for AdjTokens<'a> {
     type Target = [Token<'a>];
 

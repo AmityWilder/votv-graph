@@ -25,43 +25,31 @@ impl std::fmt::Display for SizeHint {
     }
 }
 
-impl From<usize> for SizeHint {
-    fn from(value: usize) -> Self {
-        Self {
-            low: value,
-            high: Some(value),
-        }
+impl SizeHint {
+    #[inline]
+    pub const fn new(n: usize) -> Self {
+        Self::new_range(n, Some(n))
+    }
+
+    #[inline]
+    pub const fn new_range(low: usize, high: Option<usize>) -> Self {
+        Self { low, high }
     }
 }
-impl From<std::ops::RangeInclusive<usize>> for SizeHint {
-    fn from(value: std::ops::RangeInclusive<usize>) -> Self {
+
+impl<T: std::ops::RangeBounds<usize>> From<T> for SizeHint {
+    fn from(value: T) -> Self {
         Self {
-            low: *value.start(),
-            high: Some(*value.end()),
-        }
-    }
-}
-impl From<std::ops::RangeFrom<usize>> for SizeHint {
-    fn from(value: std::ops::RangeFrom<usize>) -> Self {
-        Self {
-            low: value.start,
-            high: None,
-        }
-    }
-}
-impl From<std::ops::RangeToInclusive<usize>> for SizeHint {
-    fn from(value: std::ops::RangeToInclusive<usize>) -> Self {
-        Self {
-            low: 0,
-            high: Some(value.end),
-        }
-    }
-}
-impl From<std::ops::RangeFull> for SizeHint {
-    fn from(_value: std::ops::RangeFull) -> Self {
-        Self {
-            low: 0,
-            high: None,
+            low: match value.start_bound().cloned() {
+                std::ops::Bound::Included(n) => n,
+                std::ops::Bound::Excluded(n) => n + 1,
+                std::ops::Bound::Unbounded => 0,
+            },
+            high: match value.end_bound().cloned() {
+                std::ops::Bound::Included(n) => Some(n),
+                std::ops::Bound::Excluded(n) => Some(n - 1),
+                std::ops::Bound::Unbounded => None,
+            },
         }
     }
 }
@@ -408,12 +396,12 @@ impl Value {
                 let mut it = ts.iter();
                 if let Some(t0) = it.next() {
                     if it.all(|t| t == t0) {
-                        Type::Array(Box::new(t0.clone()), SizeHint::from(ts.len()))
+                        Type::Array(Box::new(t0.clone()), SizeHint::new(ts.len()))
                     } else {
                         Type::Tuple(ts)
                     }
                 } else {
-                    Type::Array(Box::new(Type::Text), SizeHint::from(0))
+                    Type::Array(Box::new(Type::Text), SizeHint::new(0))
                 }
             }
         }
