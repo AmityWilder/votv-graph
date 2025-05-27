@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::VecDeque, ops::ControlFlow, str::FromStr, task::Poll};
 use raylib::prelude::*;
-use types::{SizeHint, Type, Value};
+use types::{SizeHint, Type};
 // use snippet::Snippet;
 use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{Coords, ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
 
@@ -56,45 +56,45 @@ impl Routine {
     //     })
     // }
 
-    pub fn step(&mut self, cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData) -> ControlFlow<Result<Value, CmdError>> {
-        todo!()
-        // match &mut self.subroutine {
-        //     ControlFlow::Continue(runner) => runner.step(),
-        //     ControlFlow::Break(_) => todo!(),
-        // }
+    // pub fn step(&mut self, cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData) -> ControlFlow<Result<Value, CmdError>> {
+    //     todo!()
+    //     // match &mut self.subroutine {
+    //     //     ControlFlow::Continue(runner) => runner.step(),
+    //     //     ControlFlow::Break(_) => todo!(),
+    //     // }
 
 
-        // loop {
-        //     if let Some(line) = self.src.pop_front() {
-        //         let args = &line
-        //             .split_whitespace()
-        //             .map(|s| Cow::Owned(s.to_string()))
-        //             .chain(prev.into_iter().flat_map(|prev| CmdRunner::into_args(prev, data).into_iter()))
-        //             .collect::<Vec<_>>()
-        //             [..];
+    //     // loop {
+    //     //     if let Some(line) = self.src.pop_front() {
+    //     //         let args = &line
+    //     //             .split_whitespace()
+    //     //             .map(|s| Cow::Owned(s.to_string()))
+    //     //             .chain(prev.into_iter().flat_map(|prev| CmdRunner::into_args(prev, data).into_iter()))
+    //     //             .collect::<Vec<_>>()
+    //     //             [..];
 
-        //         match CmdRunner::init(data, args) {
-        //             Ok(runner) => {
-        //                 self.prev = RoutineActivity::Ongoing(runner);
-        //             }
-        //             Err(e) => break ControlFlow::Break(Err(e)),
-        //         }
-        //     } else {
-        //         break ControlFlow::Break(Ok(prev.expect("should have at least one command")));
-        //     }
+    //     //         match CmdRunner::init(data, args) {
+    //     //             Ok(runner) => {
+    //     //                 self.prev = RoutineActivity::Ongoing(runner);
+    //     //             }
+    //     //             Err(e) => break ControlFlow::Break(Err(e)),
+    //     //         }
+    //     //     } else {
+    //     //         break ControlFlow::Break(Ok(prev.expect("should have at least one command")));
+    //     //     }
 
-        //     let prev = match &mut self.prev {
-        //         RoutineActivity::Ongoing(run) => {
-        //             match run.step(cout, cin, data) {
-        //                 Poll::Ready(Ok(ret)) => Some(ret),
-        //                 Poll::Ready(Err(e)) => break ControlFlow::Break(Err(e)),
-        //                 Poll::Pending => break ControlFlow::Continue(()),
-        //             }
-        //         }
-        //         RoutineActivity::Finished(ret) => ret.take(),
-        //     };
-        // }
-    }
+    //     //     let prev = match &mut self.prev {
+    //     //         RoutineActivity::Ongoing(run) => {
+    //     //             match run.step(cout, cin, data) {
+    //     //                 Poll::Ready(Ok(ret)) => Some(ret),
+    //     //                 Poll::Ready(Err(e)) => break ControlFlow::Break(Err(e)),
+    //     //                 Poll::Pending => break ControlFlow::Continue(()),
+    //     //             }
+    //     //         }
+    //     //         RoutineActivity::Finished(ret) => ret.take(),
+    //     //     };
+    //     // }
+    // }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

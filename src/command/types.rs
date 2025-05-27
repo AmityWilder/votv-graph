@@ -1,9 +1,9 @@
-// use raylib::prelude::*;
-use crate::{types::{ParseColorError, ParseCoordsError, ParseTempoError}};
-pub use crate::{command::Cmd, types::{Coords, RichColor, Tempo}};
-use std::str::FromStr;
+use std::borrow::Cow;
+use raylib::prelude::*;
+use crate::types::{Coords, RichColor, Tempo};
+use super::{lex::{AdjTokens, Token}, Cmd};
 
-use super::CmdError;
+pub mod signature;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SizeHint {
@@ -34,6 +34,20 @@ impl SizeHint {
     #[inline]
     pub const fn new_range(low: usize, high: Option<usize>) -> Self {
         Self { low, high }
+    }
+
+    #[inline]
+    pub const fn is_exactly(&self, n: usize) -> bool {
+        match self.high {
+            None => false,
+            Some(high) => self.low == high && high == n
+        }
+    }
+}
+
+impl PartialEq<usize> for SizeHint {
+    fn eq(&self, other: &usize) -> bool {
+        self.is_exactly(*other)
     }
 }
 
@@ -72,581 +86,322 @@ impl SizeHint {
     }
 }
 
-#[derive(Debug)]
-pub enum BoundsError {
-    FailCondition(String),
-}
-impl std::fmt::Display for BoundsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BoundsError::FailCondition(reason) => write!(f, "bounds failed: {reason}"),
-        }
+#[derive(Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct UsizeSet([std::ops::RangeInclusive<usize>]);
+
+impl UsizeSet {
+    #[inline]
+    pub const fn new(inner: &[std::ops::RangeInclusive<usize>]) -> &Self {
+        // SAFETY: UsizeSet is a transparent wrapper
+        unsafe { &*(inner as *const [std::ops::RangeInclusive<usize>] as *const Self) }
     }
-}
-impl std::error::Error for BoundsError {}
 
-#[derive(Debug, Clone)]
-pub enum Bounds {
-    Text   { cond: fn(&str) -> String, pred: fn(&str      ) -> Result<(), BoundsError> },
-    Cmd    { cond: fn(&str) -> String, pred: fn(&Cmd      ) -> Result<(), BoundsError> },
-    Vertex { cond: fn(&str) -> String, pred: fn(&str      ) -> Result<(), BoundsError> },
-    Bool   { cond: fn(&str) -> String, pred: fn(&bool     ) -> Result<(), BoundsError> },
-    Count  { cond: fn(&str) -> String, pred: fn(&usize    ) -> Result<(), BoundsError> },
-    Amount { cond: fn(&str) -> String, pred: fn(&f32      ) -> Result<(), BoundsError> },
-    Coords { cond: fn(&str) -> String, pred: fn(&Coords   ) -> Result<(), BoundsError> },
-    Color  { cond: fn(&str) -> String, pred: fn(&RichColor) -> Result<(), BoundsError> },
-    Tempo  { cond: fn(&str) -> String, pred: fn(&Tempo    ) -> Result<(), BoundsError> },
-    Tuple  { cond: fn(&str) -> String, pred: fn(&[Value]  ) -> Result<(), BoundsError>, ts: Vec<Type> },
-    Union  { cond: fn(&str) -> String, pred: fn(&Value    ) -> Result<(), BoundsError>, ts: Vec<Type> },
-    Array  { cond: fn(&str) -> String, pred: fn(&[Value]  ) -> Result<(), BoundsError>, t: Box<Type>, size: SizeHint },
-}
-
-impl PartialEq for Bounds {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Text   { pred: l_pred,                       .. }, Self::Text   { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Cmd    { pred: l_pred,                       .. }, Self::Cmd    { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Vertex { pred: l_pred,                       .. }, Self::Vertex { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Bool   { pred: l_pred,                       .. }, Self::Bool   { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Count  { pred: l_pred,                       .. }, Self::Count  { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Amount { pred: l_pred,                       .. }, Self::Amount { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Coords { pred: l_pred,                       .. }, Self::Coords { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Color  { pred: l_pred,                       .. }, Self::Color  { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Tempo  { pred: l_pred,                       .. }, Self::Tempo  { pred: r_pred,                       .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred),
-            (Self::Tuple  { pred: l_pred, ts: l_ts,             .. }, Self::Tuple  { pred: r_pred, ts: r_ts,             .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred) && l_ts == r_ts,
-            (Self::Union  { pred: l_pred, ts: l_ts,             .. }, Self::Union  { pred: r_pred, ts: r_ts,             .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred) && l_ts == r_ts,
-            (Self::Array  { pred: l_pred, t: l_t, size: l_size, .. }, Self::Array  { pred: r_pred, t: r_t, size: r_size, .. }) => std::ptr::fn_addr_eq(*l_pred, *r_pred) && l_size == r_size && l_t == r_t,
-            _ => false,
-        }
+    #[inline]
+    pub fn min(&self) -> usize {
+        self.0.iter()
+            .map(|range| *range.end())
+            .max()
+            .expect("RangedType must have at least one range")
     }
-}
 
-impl Bounds {
-    pub fn inner_type(&self) -> Type {
-        match self {
-            Self::Text  {..} => Type::Text,
-            Self::Cmd   {..} => Type::Cmd,
-            Self::Vertex{..} => Type::Vertex,
-            Self::Bool  {..} => Type::Bool,
-            Self::Count {..} => Type::Count,
-            Self::Amount{..} => Type::Amount,
-            Self::Coords{..} => Type::Coords,
-            Self::Color {..} => Type::Color,
-            Self::Tempo {..} => Type::Tempo,
-            Self::Tuple { ts, .. } => Type::Tuple(ts.clone()),
-            Self::Union { ts, .. } => Type::Union(ts.clone()),
-            Self::Array { t, size, .. } => Type::Array(t.clone(), *size),
-        }
+    #[inline]
+    pub fn max(&self) -> usize {
+        self.0.iter()
+            .map(|range| *range.end())
+            .max()
+            .expect("RangedType must have at least one range")
     }
-}
 
-impl std::fmt::Display for Bounds {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let local = "x";
-        let (inner, cond) = (self.inner_type(), match self {
-            | Bounds::Text   { cond, .. }
-            | Bounds::Cmd    { cond, .. }
-            | Bounds::Vertex { cond, .. }
-            | Bounds::Bool   { cond, .. }
-            | Bounds::Count  { cond, .. }
-            | Bounds::Amount { cond, .. }
-            | Bounds::Coords { cond, .. }
-            | Bounds::Color  { cond, .. }
-            | Bounds::Tempo  { cond, .. }
-            | Bounds::Tuple  { cond, .. }
-            | Bounds::Union  { cond, .. }
-            | Bounds::Array  { cond, .. }
-                => cond(local),
-        });
-
-        write!(f, "{inner} {local} where {cond}")
+    #[inline]
+    pub fn contains(&self, n: usize) -> bool {
+        self.0.iter()
+            .any(|range| range.contains(&n))
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum Type {
-    #[default]
-    Void,
-    Text,
-    Literal(&'static str),
-    Cmd,
-    Vertex,
-    Bool,
-    Count,
-    Amount,
-    Coords,
-    Color,
-    Tempo,
-    Tuple(Vec<Type>),
-    Union(Vec<Type>),
-    Array(Box<Type>, SizeHint),
-    Bounded(Bounds),
-}
-
-impl std::fmt::Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Type::Void         => "()".fmt(f),
-            Type::Text         => "str".fmt(f),
-            Type::Literal(lit) => lit.fmt(f),
-            Type::Cmd          => "cmd".fmt(f),
-            Type::Vertex       => "vertex".fmt(f),
-            Type::Bool         => "bool".fmt(f),
-            Type::Count        => "uint".fmt(f),
-            Type::Amount       => "float".fmt(f),
-            Type::Coords       => "coords".fmt(f),
-            Type::Color        => "color".fmt(f),
-            Type::Tempo        => "tempo".fmt(f),
-            Type::Tuple(ts) => {
-                let mut it = ts.iter();
-                '('.fmt(f)?;
-                if let Some(t) = it.next() {
-                    t.fmt(f)?;
-                    for t in it {
-                        write!(f, ", {t}")?;
-                    }
-                }
-                ')'.fmt(f)
-            }
-            Type::Union(ts) => {
-                let mut it = ts.iter();
-                if let Some(t) = it.next() {
-                    t.fmt(f)?;
-                    for t in it {
-                        write!(f, "|{t}")?;
-                    }
-                }
-                Ok(())
-            }
-            Type::Array(t, size_hint) => write!(f, "[{t}; {size_hint}]"),
-            Type::Bounded(bounds) => bounds.fmt(f),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub enum Value {
-    #[default]
-    Void,
-    Text(String),
-    Lit(&'static str),
-    Cmd(Cmd),
-    Vertex(String),
-    Bool(bool),
-    Count(usize),
-    Amount(f32),
-    Coords(Coords),
-    Color(RichColor),
-    Tempo(Tempo),
-    Multi(Vec<Value>),
-}
-
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Void => Ok(()),
-
-            Self::Text  (inner) => inner.fmt(f),
-            Self::Lit   (inner) => inner.fmt(f),
-            Self::Cmd   (inner) => inner.fmt(f),
-            Self::Vertex(inner) => inner.fmt(f),
-            Self::Bool  (inner) => inner.fmt(f),
-            Self::Count (inner) => inner.fmt(f),
-            Self::Amount(inner) => inner.fmt(f),
-            Self::Coords(inner) => inner.fmt(f),
-            Self::Color (inner) => inner.fmt(f),
-            Self::Tempo (inner) => inner.fmt(f),
-
-            Self::Multi (inner) => {
-                if let [first, rest @ ..] = &inner[..] {
-                    first.fmt(f)?;
-                    for item in rest {
-                        use std::fmt::Write;
-                        f.write_char(' ')?;
-                        item.fmt(f)?;
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl FromStr for Value {
-    type Err = !;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut items = s.split_whitespace()
-            .map(|s| {
-                if s.starts_with(|c: char| c.is_ascii_digit()) {
-                    if let Ok(x) = s.parse() {
-                        return Value::Count(x);
-                    }
-                } else if s.strip_prefix('-').unwrap_or(s).starts_with(|c: char| c.is_ascii_digit() || c == '.') {
-                    if let Ok(x) = s.parse() {
-                        return Value::Amount(x);
-                    }
-                } if let Ok(x) = s.parse::<bool>() {
-                    return Value::Bool(x);
-                } else if s.starts_with('#') || s.starts_with("rgb(") || s.starts_with("rgba(") {
-                    if let Ok(x) = s.parse() {
-                        return Value::Color(x);
-                    }
-                } else if s.starts_with("x:") {
-                    if let Ok(x) = s.parse() {
-                        return Value::Coords(x);
-                    }
-                } else if s.starts_with("ticks:") {
-                    if let Ok(x) = s.parse() {
-                        return Value::Tempo(x);
-                    }
-                } else if let Ok(x) = s.parse() {
-                    return Value::Cmd(x);
-                } else if let Ok(x) = s.parse() {
-                    return Value::Color(x);
-                }
-                Value::Text(s.to_string())
+    #[inline]
+    pub fn is_superset_of(&self, n: &Self) -> bool {
+        n.0.iter()
+            .all(|sub_range| {
+                self.0.iter()
+                    .any(|range| range.start() <= sub_range.start() && sub_range.end() <= range.end())
             })
-            .collect::<Vec<Value>>();
-
-        Ok(match items.len() {
-            0 => Value::Void,
-            1 => items.pop().unwrap(),
-            _ => Value::Multi(items),
-        })
     }
 }
 
-#[derive(Debug)]
-pub enum CoerceError {
-    Incompatible { expect: Type, actual: Type },
-    Ambiguous { possible: Vec<Type> },
-    Bounds(BoundsError),
-    ParseInt(std::num::ParseIntError),
-    ParseFloat(std::num::ParseFloatError),
-    ParseBool(std::str::ParseBoolError),
-    ParseCmd(CmdError),
-    ParseColor(ParseColorError),
-    ParseCoords(ParseCoordsError),
-    ParseTempo(ParseTempoError),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ranged<'a> {
+    Text(&'a [&'static str]),
+    Cmd(&'a [Cmd]),
+    Count(&'a UsizeSet),
 }
-impl std::fmt::Display for CoerceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Const<'a> {
+    Text(&'a str),
+    Cmd(Cmd),
+    Count(usize),
+    Bool(bool),
+    Color(Color),
+    Coords(Vector3),
+    Tempo(Tempo),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Type<'a> {
+    Any,
+    Text,
+    Cmd,
+    Count,
+    Bool,
+    Color,
+    Coords,
+    Tempo,
+    Ranged(Ranged<'a>),
+    Const(Const<'a>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TypeBounds<'a> {
+    ty: Type<'a>,
+    len: SizeHint,
+}
+
+impl<'a> TypeBounds<'a> {
+    #[inline]
+    pub const fn simple(ty: Type<'a>) -> Self {
+        Self::array(ty, SizeHint::new(1))
+    }
+
+    pub const fn array(ty: Type<'a>, len: SizeHint) -> Self {
+        Self { ty, len }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RetBounds {
+    /// Array with ranged len must not be followed by an argument of the same type.
+    Always(&'static [TypeBounds<'static>]),
+    /// A closure that takes a slice in the same format as the arguments, but with knowledge of what is being provided.
+    Mapped(for<'a, 'b> fn(&'a [TypeBounds<'b>]) -> Cow<'a, [TypeBounds<'a>]>),
+}
+
+impl RetBounds {
+    #[inline]
+    pub const fn void() -> Self {
+        Self::Always(&[])
+    }
+}
+
+pub enum Coercion<T> {
+    /// Impossible
+    Never,
+    /// Possible
+    Maybe(T),
+    /// Guaranteed
+    Always(T),
+}
+use Coercion::*;
+
+impl<T> Coercion<T> {
+    #[must_use]
+    #[inline]
+    pub const fn is_impossible(&self) -> bool {
+        matches!(self, Never)
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn is_possible(&self) -> bool {
+        matches!(self, Maybe(_) | Always(_))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn is_certain(&self) -> bool {
+        matches!(self, Always(_))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn is_uncertain(&self) -> bool {
+        matches!(self, Never | Maybe(_))
+    }
+}
+
+pub trait OptCoerceExt: IntoIterator {
+    fn always(self) -> Coercion<Self::Item>;
+    fn maybe(self) -> Coercion<Self::Item>;
+    fn then_always<U, F: FnOnce(Self::Item) -> U>(self, f: F) -> Coercion<U>;
+    fn then_maybe<U, F: FnOnce(Self::Item) -> U>(self, f: F) -> Coercion<U>;
+}
+
+impl<T> OptCoerceExt for Option<T> {
+    #[inline]
+    fn always(self) -> Coercion<T> {
         match self {
-            Self::Incompatible { expect, actual } => write!(f, "type mismatch: `{actual}` is not compatible with `{expect}`"),
-            Self::Ambiguous { possible } => {
-                "ambiguous coercion target; could be any of ".fmt(f)?;
-                let mut it = possible.into_iter();
-                if let Some(t) = it.next() {
-                    t.fmt(f)?;
-                    for t in possible {
-                        write!(f, ", {t}")?;
-                    }
-                }
-                Ok(())
-            }
-            Self::Bounds(_) => "coercion passed, but bounds were not met".fmt(f),
-
-            | Self::ParseInt(_)
-            | Self::ParseFloat(_)
-            | Self::ParseBool(_)
-            | Self::ParseCmd(_)
-            | Self::ParseColor(_)
-            | Self::ParseCoords(_)
-            | Self::ParseTempo(_)
-                => "parse error".fmt(f),
+            Some(x) => Always(x),
+            None => Never,
         }
     }
-}
-impl std::error::Error for CoerceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+
+    #[inline]
+    fn maybe(self) -> Coercion<T> {
         match self {
-            | Self::Incompatible { .. }
-            | Self::Ambiguous { .. }
-                => None,
-
-            Self::Bounds(e) => Some(e),
-            Self::ParseInt(e) => Some(e),
-            Self::ParseFloat(e) => Some(e),
-            Self::ParseBool(e) => Some(e),
-            Self::ParseCmd(e) => Some(e),
-            Self::ParseColor(e) => Some(e),
-            Self::ParseCoords(e) => Some(e),
-            Self::ParseTempo(e) => Some(e),
+            Some(x) => Maybe(x),
+            None => Never,
         }
     }
-}
 
-impl Value {
-    pub fn get_type(&self) -> Type {
+    #[inline]
+    fn then_always<U, F: FnOnce(T) -> U>(self, f: F) -> Coercion<U> {
         match self {
-            Value::Void      => Type::Void,
-            Value::Text  (_) => Type::Text,
-            Value::Lit   (s) => Type::Literal(*s),
-            Value::Cmd   (_) => Type::Cmd,
-            Value::Vertex(_) => Type::Vertex,
-            Value::Bool  (_) => Type::Bool,
-            Value::Count (_) => Type::Count,
-            Value::Amount(_) => Type::Amount,
-            Value::Coords(_) => Type::Coords,
-            Value::Color (_) => Type::Color,
-            Value::Tempo (_) => Type::Tempo,
-            Value::Multi (v) => {
-                let ts = v.iter().map(|x| x.get_type()).collect::<Vec<Type>>();
-                let mut it = ts.iter();
-                if let Some(t0) = it.next() {
-                    if it.all(|t| t == t0) {
-                        Type::Array(Box::new(t0.clone()), SizeHint::new(ts.len()))
-                    } else {
-                        Type::Tuple(ts)
-                    }
-                } else {
-                    Type::Array(Box::new(Type::Text), SizeHint::new(0))
-                }
-            }
+            Some(x) => Always(f(x)),
+            None => Never,
         }
     }
 
-    fn bounds_test(&self, bound: &Bounds) -> Result<(), CoerceError> {
-        let inner_type = bound.inner_type();
-        let passes_vibe_check = self.is_type(&inner_type);
-        match (passes_vibe_check, bound, self) {
-            (true, Bounds::Text   { pred, .. }, Value::Text  (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Cmd    { pred, .. }, Value::Cmd   (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Vertex { pred, .. }, Value::Vertex(value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Bool   { pred, .. }, Value::Bool  (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Count  { pred, .. }, Value::Count (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Amount { pred, .. }, Value::Amount(value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Coords { pred, .. }, Value::Coords(value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Color  { pred, .. }, Value::Color (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Tempo  { pred, .. }, Value::Tempo (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Tuple  { pred, .. }, Value::Multi (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Union  { pred, .. },               value ) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-            (true, Bounds::Array  { pred, .. }, Value::Multi (value)) => pred(value).map_err(|e| CoerceError::Bounds(e)),
-
-            _ => Err(CoerceError::Incompatible { expect: inner_type, actual: self.get_type() }),
-        }
-    }
-
-    /// Same type without coercion
-    pub fn is_type(&self, t: &Type) -> bool {
-        match t {
-            // T == T
-            Type::Void   => matches!(self, Value::Void),
-            Type::Text   => matches!(self, Value::Text  (_)),
-            Type::Cmd    => matches!(self, Value::Cmd   (_)),
-            Type::Vertex => matches!(self, Value::Vertex(_)),
-            Type::Bool   => matches!(self, Value::Bool  (_)),
-            Type::Count  => matches!(self, Value::Count (_)),
-            Type::Amount => matches!(self, Value::Amount(_)),
-            Type::Coords => matches!(self, Value::Coords(_)),
-            Type::Color  => matches!(self, Value::Color (_)),
-            Type::Tempo  => matches!(self, Value::Tempo (_)),
-
-            Type::Literal(lit) => matches!(self, Value::Text(s) if s == lit),
-
-            // T == T|U|V
-            Type::Union(ts) => ts.iter().any(|t| self.is_type(t)),
-
-            // [T; n] == [T; l..=h] where l<=n<=h
-            Type::Array(t, size) => {
-                if let Value::Multi(items) = self {
-                    size.contains(items.len()) &&
-                        items.iter().all(|item| item.is_type(t))
-                } else { false }
-            }
-
-            // (T, U, V) == (T, U, V)
-            Type::Tuple(ts) => {
-                if let Value::Multi(items) = self {
-                    ts.len() == items.len() &&
-                        ts.iter().zip(items.iter()).all(|(t, item)| item.is_type(t))
-                } else { false }
-            }
-
-            Type::Bounded(bounds) => self.bounds_test(bounds).is_ok(),
-        }
-    }
-
-    fn coerce_parse(s: &str, t: &Type) -> Result<Value, CoerceError> {
-        let result = match t {
-            // "" -> ()
-            Type::Void => s.is_empty().then_some(Value::Void)
-                .ok_or_else(|| CoerceError::Incompatible { expect: t.clone(), actual: Type::Text }),
-
-            // str -> str
-            // (should normally be handled by `coerce_to`, but just in case...)
-            Type::Text => Ok(Value::Text(s.to_string())),
-            Type::Literal(lit) => (s == *lit).then_some(Value::Lit(lit))
-                .ok_or_else(|| CoerceError::Incompatible { expect: t.clone(), actual: Type::Text }),
-
-            // str -> T
-            Type::Bool   => s.parse().map_err(|e| CoerceError::ParseBool  (e)).map(Value::Bool  ),
-            Type::Count  => s.parse().map_err(|e| CoerceError::ParseInt   (e)).map(Value::Count ),
-            Type::Amount => s.parse().map_err(|e| CoerceError::ParseFloat (e)).map(Value::Amount),
-            Type::Cmd    => s.parse().map_err(|e| CoerceError::ParseCmd   (e)).map(Value::Cmd   ),
-            Type::Color  => s.parse().map_err(|e| CoerceError::ParseColor (e)).map(Value::Color ),
-            Type::Tempo  => s.parse().map_err(|e| CoerceError::ParseTempo (e)).map(Value::Tempo ),
-            Type::Coords => s.parse().map_err(|e| CoerceError::ParseCoords(e)).map(Value::Coords),
-
-            // "<ID or alias>" -> VertexID
-            Type::Vertex => Ok(Value::Vertex(s.to_string())),
-
-            // "<T str> <U str> <V str>" -> (T, U, V)
-            Type::Tuple(ts) => {
-                let mut from_it = s.split_whitespace();
-                let mut into_it = ts.iter();
-                let mut items = Vec::with_capacity(ts.len());
-                loop {
-                    let (from, into) = (from_it.next(), into_it.next());
-                    if let (Some(from), Some(into)) = (from, into) {
-                        items.push(Self::coerce_parse(from, into)?);
-                    } else {
-                        break (into.is_none() && from.is_none()).then_some(Value::Multi(items))
-                            .ok_or_else(|| CoerceError::Incompatible { expect: t.clone(), actual: s.parse::<Value>().unwrap().get_type() });
-                    }
-                }
-            }
-
-            Type::Union(ts) => {
-                if ts.iter().any(|t| matches!(t, Type::Text)) {
-                    // str -> T|str|U
-                    Ok(Value::Text(s.to_string()))
-                } else {
-                    // coerse to *which* variant?
-                    Err(CoerceError::Ambiguous { possible: ts.to_vec() })
-                }
-            }
-
-            Type::Array(shared_t, size) => {
-                let mut s_it = s.split_whitespace();
-                let n = s_it.clone().count();
-                if size.contains(n) {
-                    let mut items = Vec::with_capacity(n);
-                    while let Some(s) = s_it.next() {
-                        items.push(Self::coerce_parse(s, shared_t)?);
-                    }
-                    // "<T str> <T str> <T str> ...{n}" where l<=n<=h -> [T; l..=h]
-                    Ok(Value::Multi(items))
-                } else {
-                    Err(CoerceError::Incompatible { expect: t.clone(), actual: s.parse::<Value>().unwrap().get_type() })
-                }
-            }
-
-            Type::Bounded(bound) => Self::coerce_parse(s, &bound.inner_type())
-                .and_then(|value| value.bounds_test(bound).map(|()| value)),
-        };
-
-        debug_assert!(result.is_err() || result.as_ref().is_ok_and(|value| value.is_type(t)), "type coercion should produce the 'into' type");
-
-        result
-    }
-
-    pub fn coerce_to(mut self, t: &Type) -> Result<Value, CoerceError> {
-        let mut loop_count = 0;
-        let new_value = loop {
-            let result = if self.is_type(t) {
-                // T -> T
-                Ok(self)
-            } else if let Value::Multi(items) = &mut self && matches!(t, Type::Void) && items.is_empty() {
-                // [T; 0] -> ()
-                Ok(Value::Void)
-            } else if let Type::Array(_, size) = t && size.contains(0) && matches!(self, Value::Void) {
-                // () -> [T; 0..]
-                Ok(Value::Multi(Vec::new()))
-            } else if let Value::Multi(items) = &mut self && let [item] = &items[..] && item.is_type(t) {
-                // [T; 1] -> T
-                Ok(items.pop().expect("should be guarded by `[item] = &items[..]`"))
-            } else if let Type::Array(t, size) = t && size.contains(1) && self.is_type(t) {
-                // T -> [T; l..=h] where l<=1<=h
-                Ok(Value::Multi(vec![self]))
-            } else if matches!(t, Type::Text) {
-                // T -> str
-                Ok(Value::Text(self.to_string()))
-            } else if let Value::Text(s) = self {
-                // str -> T
-                Self::coerce_parse(&s, t)
-            } else if let Type::Bounded(bound) = t {
-                self.coerce_to(&bound.inner_type()).and_then(|value| value.bounds_test(bound).map(|()| value))
-            } else {
-                Err(CoerceError::Incompatible { expect: t.clone(), actual: self.get_type() })
-            };
-
-            if result.as_ref().is_ok_and(|value| !value.is_type(t)) {
-                self = result.unwrap();
-                assert!(loop_count < 32, "coercion overflow, possible loop");
-                loop_count += 1;
-                continue;
-            } else {
-                break result;
-            }
-        };
-
-        debug_assert!(new_value.is_err() || new_value.as_ref().is_ok_and(|value| value.is_type(t)), "type coercion should produce the 'into' type");
-
-        new_value
-    }
-
-    pub fn coerce_append(self, value: Value) -> Value {
-        match (self, value) {
-            // () + T -> T
-            // T + () -> T
-            (Value::Void, x) | (x, Value::Void) => x,
-
-            // [T; n] + [T; m] -> [T; n+m]
-            // [T; n] + [U; m] -> [T|U; n+m]
-            // [T; n] + [U; m] -> (T, T, ...{n}, U, U, ...{m})
-            (Value::Multi(mut v1), Value::Multi(mut v2)) => {
-                v1.append(&mut v2);
-                Value::Multi(v1)
-            }
-
-            // [T; n] + T -> [T; n+1]
-            // [T; n] + U -> [T|U; n+1]
-            // [T; n] + U -> (T, T, ...{n}, U)
-            (Value::Multi(mut v), x) => {
-                v.push(x);
-                Value::Multi(v)
-            }
-
-            // T + [T; n] -> [T; n+1]
-            // T + [U; n] -> [T|U; n+1]
-            // T + [U; n] -> (T, U, U, ...{n})
-            (x, Value::Multi(mut v)) => {
-                v.insert(0, x);
-                Value::Multi(v)
-            }
-
-            // T + T -> [T; 2]
-            // T + U -> [T|U; 2]
-            // T + U -> (T, U)
-            (a, b) => Value::Multi(vec![a, b]),
+    #[inline]
+    fn then_maybe<U, F: FnOnce(T) -> U>(self, f: F) -> Coercion<U> {
+        match self {
+            Some(x) => Maybe(f(x)),
+            None => Never,
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub trait BoolCoerceExt {
+    fn then_always<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U>;
+    fn then_maybe<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U>;
+    fn then_always_some<T>(self, value: T) -> Coercion<T>;
+    fn then_maybe_some<T>(self, value: T) -> Coercion<T>;
+}
 
-    #[test]
-    fn test_coercion() {
-        let value = "squeak #e73bc8 red x:20/y:45 apple orange".parse::<Value>().expect("parse failed");
-        assert!(value.is_type(&Type::Tuple(vec![Type::Text, Type::Color, Type::Color, Type::Coords, Type::Text, Type::Color])));
-        let new_type: Type = Type::Tuple(vec![Type::Literal("squeak"), Type::Color, Type::Color, Type::Coords, Type::Literal("apple"), Type::Color]);
-        let new_value = value.coerce_to(&new_type);
-        assert!(new_value.as_ref().is_ok_and(|x| x.is_type(&new_type)), "{:?}", new_value.unwrap_err());
+impl BoolCoerceExt for bool {
+    #[inline]
+    fn then_always<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U> {
+        if self { Always(f()) } else { Never }
     }
 
-    #[test]
-    fn test_bounds() {
-        let value = "appleeeee".parse::<Value>().expect("parse failed");
-        assert!(value.is_type(&Type::Text));
-        let new_type: Type = Type::Bounded(Bounds::Text {
-            cond: |x| format!("{x} does not end with 'e'"),
-            pred: |s| if !s.ends_with('e') { Err(BoundsError::FailCondition(format!("{s:?} ends with 'e'"))) } else { Ok(()) },
-        });
-        let new_value = value.coerce_to(&new_type);
-        assert!(new_value.as_ref().is_ok_and(|x| x.is_type(&new_type)), "{:?}", new_value.unwrap_err());
+    #[inline]
+    fn then_maybe<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U> {
+        if self { Maybe(f()) } else { Never }
+    }
+
+    #[inline]
+    fn then_always_some<T>(self, value: T) -> Coercion<T> {
+        if self { Always(value) } else { Never }
+    }
+
+    #[inline]
+    fn then_maybe_some<T>(self, value: T) -> Coercion<T> {
+        if self { Maybe(value) } else { Never }
+    }
+}
+
+pub trait ResultCoerceExt {
+    type T;
+    type E;
+
+    fn then_always_or_maybe<U, F: FnOnce(Self::T) -> U, G: FnOnce(Self::E) -> U>(self, g: G, f: F) -> Coercion<U>;
+    fn then_always_or_else<U, F: FnOnce(Self::T) -> U, G: FnOnce(Self::E) -> Coercion<U>>(self, g: G, f: F) -> Coercion<U>;
+}
+
+impl<T, E> ResultCoerceExt for Result<T, E> {
+    type T = T;
+    type E = E;
+
+    #[inline]
+    fn then_always_or_maybe<U, F: FnOnce(T) -> U, G: FnOnce(E) -> U>(self, g: G, f: F) -> Coercion<U> {
+        match self {
+            Ok(t) => Always(f(t)),
+            Err(e) => Maybe(g(e)),
+        }
+    }
+
+    #[inline]
+    fn then_always_or_else<U, F: FnOnce(T) -> U, G: FnOnce(E) -> Coercion<U>>(self, g: G, f: F) -> Coercion<U> {
+        match self {
+            Ok(t) => Always(f(t)),
+            Err(e) => g(e),
+        }
+    }
+}
+
+pub trait CoerceArg {
+    /// Converts to the most specific subset of `into` that `self` is guaranteed to belong to.
+    fn coerce_arg<'a>(&'a self, into: &'a Type<'a>) -> Coercion<Type<'a>> where Self: 'a;
+}
+
+impl CoerceArg for AdjTokens<'_> {
+    fn coerce_arg<'a>(&'a self, into: &'a Type<'a>) -> Coercion<Type<'a>> where Self: 'a {
+        use Coercion::*;
+
+        match into {
+            Type::Any => Always(Type::Any),
+            Type::Text => if let [tkn] = self as &[Token] && tkn.is_str() { Always(Type::Const(Const::Text(tkn.src))) } else { Never },
+            Type::Cmd => self.to_str().parse().ok().then_always(|x| Type::Const(Const::Cmd(x))),
+            Type::Count => if let [tkn] = self as &[Token] && tkn.is_number() { Always(tkn.src.parse().map_or(Type::Count, |n| Type::Const(Const::Count(n)))) } else { Never },
+            Type::Bool   => self.to_str().parse().ok().then_always(|b| Type::Const(Const::Bool(b))),
+            Type::Color  => self.to_str().parse().ok().then_always(|RichColor(x)| Type::Const(Const::Color(x))),
+            Type::Coords => self.to_str().parse().ok().then_always(|Coords(x)| Type::Const(Const::Coords(x))),
+            Type::Tempo  => self.to_str().parse().ok().then_always(|x| Type::Const(Const::Tempo(x))),
+            Type::Ranged(t) => match t {
+                Ranged::Text(opts) => {
+                    let s = self.to_str();
+                    opts.contains(&s)
+                        .then_always(|| Type::Const(Const::Text(s)))
+                },
+                Ranged::Cmd(opts) => {
+                    self.to_str()
+                        .parse().ok()
+                        .filter(|c| opts.contains(&c))
+                        .then_always(|c| Type::Const(Const::Cmd(c)))
+                },
+                Ranged::Count(_ranges) => todo!(),
+            },
+            Type::Const(v) => match v {
+                Const::Text(v) => matches!(self as &[Token], [tkn] if tkn.is_str() && tkn.src == *v),
+                Const::Cmd(v) => self.to_str().parse().ok().is_some_and(|c: Cmd| c == *v),
+                Const::Count(v) => if let [tkn] = self as &[Token] {
+                    tkn.is_number() && tkn.src.parse().is_ok_and(|n: usize| n == *v)
+                } else {
+                    false
+                },
+                Const::Bool(v) => if let [tkn] = self as &[Token] {
+                    matches!((v, tkn.src), (true, "true"|"1") | (false, "false"|"0"))
+                } else {
+                    false
+                },
+                Const::Color(v)  => self.to_str().parse().ok().is_some_and(|RichColor(x)| &x == v),
+                Const::Coords(v) => self.to_str().parse().ok().is_some_and(|Coords(x)| &x == v),
+                Const::Tempo(v)  => self.to_str().parse().ok().is_some_and(|x: Tempo| &x == v),
+            }.then_always(|| *into)
+        }
+    }
+}
+
+impl CoerceArg for Type<'_> {
+    fn coerce_arg<'a>(&'a self, into: &'a Type<'a>) -> Coercion<Type<'a>> where Self: 'a {
+        use Coercion::*;
+
+        match (into, self) {
+            | (Type::Any, _)
+            | (Type::Text, Self::Text | Self::Ranged(Ranged::Text(_)) | Self::Const(Const::Text(_)))
+            | (Type::Cmd, Self::Cmd | Self::Ranged(Ranged::Cmd(_)) | Self::Const(Const::Cmd(_)))
+            | (Type::Count, Self::Count | Self::Ranged(Ranged::Count(_)) | Self::Const(Const::Count(_)))
+            | (Type::Bool, Self::Bool | Self::Const(Const::Bool(_)))
+            | (Type::Color, Self::Color | Self::Const(Const::Color(_)))
+            | (Type::Coords, Self::Coords | Self::Const(Const::Coords(_)))
+            | (Type::Tempo, Self::Tempo | Self::Const(Const::Tempo(_)))
+            | (Type::Ranged(Ranged::Text(_)), Self::Text)
+            | (Type::Ranged(Ranged::Cmd(_)), Self::Cmd)
+            | (Type::Ranged(Ranged::Count(_)), Self::Count)
+                => Always(*self),
+
+            // todo
+
+            _ => Never,
+        }
     }
 }

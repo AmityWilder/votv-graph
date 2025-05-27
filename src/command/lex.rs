@@ -175,9 +175,8 @@ impl<'a> AdjTokens<'a> {
     }
 
     /// Return the concatenation of every token's `src` in the object.
-    /// Returns [`None`] if the slice is empty.
     #[inline]
-    pub const fn to_str(&self) -> Option<&'a str> {
+    pub const fn to_str(&self) -> &'a str {
         if let Some(first) = self.0.first() {
             unsafe {
                 // the existence of a first element guarantees the existence of a last element (they would be the same element).
@@ -194,10 +193,10 @@ impl<'a> AdjTokens<'a> {
                 let bytes = std::slice::from_raw_parts(start, len);
                 // because the source is a str, its elements are guaranteed to be valid utf8.
                 let s = str::from_utf8_unchecked(bytes);
-                Some(s)
+                s
             }
         } else {
-            None
+            ""
         }
     }
 }
