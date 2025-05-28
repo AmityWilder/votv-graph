@@ -1,12 +1,11 @@
 use std::borrow::Cow;
 
-use raylib::prelude::*;
 use crate::types::{Coords, RichColor, Tempo};
 use super::{lex::{AdjTokens, Token}, Cmd};
 
 pub mod signature;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct SizeHint {
     pub low: usize,
     pub high: Option<usize>,
@@ -46,29 +45,6 @@ impl SizeHint {
     }
 }
 
-impl PartialEq<usize> for SizeHint {
-    fn eq(&self, other: &usize) -> bool {
-        self.is_exactly(*other)
-    }
-}
-
-impl<T: std::ops::RangeBounds<usize>> From<T> for SizeHint {
-    fn from(value: T) -> Self {
-        Self {
-            low: match value.start_bound().cloned() {
-                std::ops::Bound::Included(n) => n,
-                std::ops::Bound::Excluded(n) => n + 1,
-                std::ops::Bound::Unbounded => 0,
-            },
-            high: match value.end_bound().cloned() {
-                std::ops::Bound::Included(n) => Some(n),
-                std::ops::Bound::Excluded(n) => Some(n - 1),
-                std::ops::Bound::Unbounded => None,
-            },
-        }
-    }
-}
-
 impl SizeHint {
     #[inline]
     pub const fn contains(&self, n: usize) -> bool {
@@ -87,29 +63,79 @@ impl SizeHint {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
+    /// No restriction
     Any,
 
+    /// Any string
     Text,
+    /// Any identifier (`[a-zA-Z_][a-zA-Z0-9_]*`)
+    Ident,
+    /// Any command
     Cmd,
+    /// Any unsigned integer
     Count,
+    /// Either `true` or `false`
     Bool,
+    /// Any RGBA color
     Color,
+    /// Any position
     Coords,
+    /// Any tempo
     Tempo,
 
+    /// Any one of the specified strings
     RangedText(&'static [&'static str]),
+    /// Any one of the specified identifiers
+    RangedIdent(&'static [&'static str]),
+    /// Any one of the specified commands
     RangedCmd(&'static [Cmd]),
+    /// Any unsigned integer in the range
     RangedCount(SizeHint),
 
+    /// A specific string
     ConstText(&'static str),
+    /// A specific identifier
+    ConstIdent(&'static str),
+    /// A specific command
     ConstCmd(Cmd),
+    /// A specific unsigned integer
     ConstCount(usize),
+    /// A specific boolean
     ConstBool(bool),
-    ConstColor(Color),
-    ConstCoords(Vector3),
+    /// A specific tempo (keyword)
     ConstTempo(Tempo),
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Any => "any".fmt(f),
+            Self::Text => "str".fmt(f),
+            Self::Ident => "ident".fmt(f),
+            Self::Cmd => "cmd".fmt(f),
+            Self::Count => "uint".fmt(f),
+            Self::Bool => "bool".fmt(f),
+            Self::Color => "color".fmt(f),
+            Self::Coords => "vec3".fmt(f),
+            Self::Tempo => "tempo".fmt(f),
+            Self::RangedText (opts) => opts.iter().map(|s| format!("\"{s}\"")) .collect::<Vec<_>>().join(" | ").fmt(f),
+            Self::RangedIdent(opts) => opts.iter().map(|s| format!( "`{s}`" )) .collect::<Vec<_>>().join(" | ").fmt(f),
+            Self::RangedCmd  (opts) => opts.iter().map(|c| format!("cmd::{c}")).collect::<Vec<_>>().join(" | ").fmt(f),
+            Self::RangedCount(range) => range.fmt(f),
+            Self::ConstText (val) => write!(f, "\"{val}\""),
+            Self::ConstIdent(val) => write!(f, "`{val}`"),
+            Self::ConstCmd  (val) => write!(f, "cmd::{val}"),
+            Self::ConstCount(val) => val.fmt(f),
+            Self::ConstBool (val) => val.fmt(f),
+            Self::ConstTempo(Tempo::Sync) => "tempo::sync".fmt(f),
+            Self::ConstTempo(Tempo::Sprint) => "tempo::sprint".fmt(f),
+            Self::ConstTempo(Tempo::Instant) => "tempo::instant".fmt(f),
+            Self::ConstTempo(Tempo::Pause) => "tempo::pause".fmt(f),
+            Self::ConstTempo(Tempo::Exact { .. }) => panic!("exact tempo not intended for constants"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -163,333 +189,157 @@ impl RetBounds {
     }
 }
 
-#[derive(Debug)]
-pub enum Coercion<T> {
-    /// Impossible
-    Never,
-    /// Possible
-    Maybe(T),
-    /// Guaranteed
-    Always(T),
-}
-use Coercion::*;
-
-impl<T: Clone> Clone for Coercion<T> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Never => Self::Never,
-            Self::Maybe(x) => Self::Maybe(x.clone()),
-            Self::Always(x) => Self::Always(x.clone()),
-        }
-    }
-}
-
-impl<T: Copy> Copy for Coercion<T> {}
-
-impl<T> Coercion<T> {
-    #[must_use]
-    #[inline]
-    pub const fn is_impossible(&self) -> bool {
-        matches!(self, Never)
-    }
-
-    #[must_use]
-    #[inline]
-    pub const fn is_possible(&self) -> bool {
-        matches!(self, Maybe(_) | Always(_))
-    }
-
-    #[must_use]
-    #[inline]
-    pub const fn is_certain(&self) -> bool {
-        matches!(self, Always(_))
-    }
-
-    #[must_use]
-    #[inline]
-    pub const fn is_uncertain(&self) -> bool {
-        matches!(self, Never | Maybe(_))
-    }
-
-    #[inline]
-    pub fn into_not_always(self) -> Self {
-        match self {
-            Always(x) => Maybe(x),
-            _ => self,
-        }
-    }
-
-    #[inline]
-    pub fn into_inner(self) -> Option<T> {
-        match self {
-            Never => None,
-            Maybe(x) | Always(x) => Some(x),
-        }
-    }
-
-    #[inline]
-    pub fn into_checked(self) -> Option<(bool, T)> {
-        match self {
-            Never => None,
-            Maybe(x) => Some((false, x)),
-            Always(x) => Some((true, x)),
-        }
-    }
-}
-
-pub trait OptCoerceExt: IntoIterator {
-    fn always(self) -> Coercion<Self::Item>;
-    fn maybe(self) -> Coercion<Self::Item>;
-    fn then_always<U, F: FnOnce(Self::Item) -> U>(self, f: F) -> Coercion<U>;
-    fn then_maybe<U, F: FnOnce(Self::Item) -> U>(self, f: F) -> Coercion<U>;
-}
-
-impl<T> OptCoerceExt for Option<T> {
-    #[inline]
-    fn always(self) -> Coercion<T> {
-        match self {
-            Some(x) => Always(x),
-            None => Never,
-        }
-    }
-
-    #[inline]
-    fn maybe(self) -> Coercion<T> {
-        match self {
-            Some(x) => Maybe(x),
-            None => Never,
-        }
-    }
-
-    #[inline]
-    fn then_always<U, F: FnOnce(T) -> U>(self, f: F) -> Coercion<U> {
-        match self {
-            Some(x) => Always(f(x)),
-            None => Never,
-        }
-    }
-
-    #[inline]
-    fn then_maybe<U, F: FnOnce(T) -> U>(self, f: F) -> Coercion<U> {
-        match self {
-            Some(x) => Maybe(f(x)),
-            None => Never,
-        }
-    }
-}
-
-pub trait BoolCoerceExt {
-    fn then_always<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U>;
-    fn then_maybe<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U>;
-    fn then_always_some<T>(self, value: T) -> Coercion<T>;
-    fn then_maybe_some<T>(self, value: T) -> Coercion<T>;
-}
-
-impl BoolCoerceExt for bool {
-    #[inline]
-    fn then_always<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U> {
-        if self { Always(f()) } else { Never }
-    }
-
-    #[inline]
-    fn then_maybe<U, F: FnOnce() -> U>(self, f: F) -> Coercion<U> {
-        if self { Maybe(f()) } else { Never }
-    }
-
-    #[inline]
-    fn then_always_some<T>(self, value: T) -> Coercion<T> {
-        if self { Always(value) } else { Never }
-    }
-
-    #[inline]
-    fn then_maybe_some<T>(self, value: T) -> Coercion<T> {
-        if self { Maybe(value) } else { Never }
-    }
-}
-
-pub trait ResultCoerceExt {
-    type T;
-    type E;
-
-    fn then_always_or_maybe<U, F: FnOnce(Self::T) -> U, G: FnOnce(Self::E) -> U>(self, g: G, f: F) -> Coercion<U>;
-    fn then_always_or_else<U, F: FnOnce(Self::T) -> U, G: FnOnce(Self::E) -> Coercion<U>>(self, g: G, f: F) -> Coercion<U>;
-}
-
-impl<T, E> ResultCoerceExt for Result<T, E> {
-    type T = T;
-    type E = E;
-
-    #[inline]
-    fn then_always_or_maybe<U, F: FnOnce(T) -> U, G: FnOnce(E) -> U>(self, g: G, f: F) -> Coercion<U> {
-        match self {
-            Ok(t) => Always(f(t)),
-            Err(e) => Maybe(g(e)),
-        }
-    }
-
-    #[inline]
-    fn then_always_or_else<U, F: FnOnce(T) -> U, G: FnOnce(E) -> Coercion<U>>(self, g: G, f: F) -> Coercion<U> {
-        match self {
-            Ok(t) => Always(f(t)),
-            Err(e) => g(e),
-        }
-    }
-}
-
 pub trait CoerceArg {
     /// Converts to the most specific subset of `into` that `self` is guaranteed to belong to.
-    fn coerce_arg(&self, into: &Type) -> Coercion<Type>;
+    fn coerce_arg(&self, into: &Type) -> Option<(bool, Type)>;
 }
 
 #[inline]
-fn coerse_text(tokens: &AdjTokens<'_>) -> Coercion<Type> {
+fn coerse_text(tokens: &AdjTokens<'_>) -> Option<(bool, Type)> {
     if let [tkn] = tokens as &[Token] {
         if tkn.is_str() {
-            return Always(Type::Text);
+            return Some((true, Type::Text));
         }
     }
-    Never
+    None
 }
 
 #[inline]
-fn coerse_count(tokens: &AdjTokens<'_>) -> Coercion<Type> {
+fn coerse_ident(tokens: &AdjTokens<'_>) -> Option<(bool, Type)> {
+    if let [tkn] = tokens as &[Token] {
+        if tkn.is_ident() {
+            return Some((true, Type::Ident));
+        }
+    }
+    None
+}
+
+#[inline]
+fn coerse_count(tokens: &AdjTokens<'_>) -> Option<(bool, Type)> {
     if let [tkn] = tokens as &[Token] {
         if tkn.is_number() {
-            return Always(if let Ok(n) = tkn.src.parse() {
+            return Some((true, if let Ok(n) = tkn.src.parse() {
                 Type::ConstCount(n)
             } else {
                 Type::Count
-            });
+            }));
         }
     }
-    Never
+    None
 }
 
 #[inline]
-fn coerce_from_str<T, F>(tokens: &AdjTokens<'_>, f: F) -> Coercion<Type>
+fn coerce_from_str<T, F>(tokens: &AdjTokens<'_>, f: F) -> Option<(bool, Type)>
 where
     T: std::str::FromStr,
     F: FnOnce(T) -> Type,
 {
-    tokens.to_str().parse().ok().then_always(f)
+    tokens.to_str().parse().ok().map(|x| (true, f(x)))
 }
 
-#[inline]
-fn coerse_cmd(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |x| Type::ConstCmd(x))
-}
-
-#[inline]
-fn coerse_bool(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |b| Type::ConstBool(b))
-}
-
-#[inline]
-fn coerse_color(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |RichColor(x)| Type::ConstColor(x))
-}
-
-#[inline]
-fn coerse_coords(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |Coords(x)| Type::ConstCoords(x))
-}
-
-#[inline]
-fn coerse_tempo(tokens: &AdjTokens<'_>) -> Coercion<Type> {
-    coerce_from_str(tokens, |x| Type::ConstTempo(x))
-}
-
-fn coerce_any(tokens: &AdjTokens<'_>) -> Coercion<Type> {
+fn coerce_any(tokens: &AdjTokens<'_>) -> Option<(bool, Type)> {
     if let [tkn] = tokens as &[Token] {
         if tkn.is_number() {
-            return Always(if let Ok(n) = tkn.src.parse() {
+            return Some((true, if let Ok(n) = tkn.src.parse() {
                 Type::ConstCount(n)
             } else {
                 Type::Count
-            });
+            }));
         } else if tkn.is_ident() {
             if let Ok(x) = tkn.src.parse() {
-                return Always(Type::ConstBool(x));
+                return Some((true, Type::ConstBool(x)));
             }
         }
     }
 
     let s = tokens.to_str();
     if let Ok(x) = s.parse() {
-        Always(Type::ConstCmd(x))
-    } else if let Ok(RichColor(x)) = s.parse() {
-        Always(Type::ConstColor(x))
-    } else if let Ok(Coords(x)) = s.parse() {
-        Always(Type::ConstCoords(x))
-    } else if let Ok(x) = s.parse() {
-        Always(Type::ConstTempo(x))
-    } else {
-        Always(Type::Text)
+        return Some((true, Type::ConstCmd(x)));
+    } else if let Ok(RichColor(_)) = s.parse() {
+        return Some((true, Type::Color));
+    } else if let Ok(Coords(_)) = s.parse() {
+        return Some((true, Type::Coords));
+    } else if let Some(x) = s.parse().ok().filter(|tempo| !matches!(tempo, Tempo::Exact { .. })) {
+        return Some((true, Type::ConstTempo(x)));
+    } else if let [tkn] = tokens as &[Token] {
+        if tkn.is_ident() {
+            return Some((true, Type::Ident));
+        } else if tkn.is_text() {
+            return Some((true, Type::Text));
+        }
     }
+
+    Some((true, Type::Any))
 }
 
 impl CoerceArg for AdjTokens<'_> {
-    fn coerce_arg(&self, into: &Type) -> Coercion<Type> {
+    fn coerce_arg(&self, into: &Type) -> Option<(bool, Type)> {
         match into {
             Type::Any => coerce_any(self),
+
             Type::Text => coerse_text(self),
-            Type::Cmd => coerse_cmd(self),
+            Type::Ident => coerse_ident(self),
+            Type::Cmd => coerce_from_str(self, |x| Type::ConstCmd(x)),
             Type::Count => coerse_count(self),
-            Type::Bool => coerse_bool(self),
-            Type::Color => coerse_color(self),
-            Type::Coords => coerse_coords(self),
-            Type::Tempo => coerse_tempo(self),
+            Type::Bool => coerce_from_str(self, |b| Type::ConstBool(b)),
+            Type::Color => coerce_from_str(self, |RichColor(_)| Type::Color),
+            Type::Coords => coerce_from_str(self, |Coords(_)| Type::Coords),
+            Type::Tempo => coerce_from_str(self, |x| Type::ConstTempo(x)),
 
             Type::RangedText(opts) => {
                 let s = self.to_str();
                 opts.iter()
                     .find(|&&opt| opt == s)
-                    .then_always(|&opt| Type::ConstText(opt))
+                    .map(|&opt| (true, Type::ConstText(opt)))
+            },
+            Type::RangedIdent(opts) => {
+                if let [tkn] = self as &[Token] && tkn.is_ident() {
+                    opts.iter()
+                        .find(|&&opt| opt == tkn.src)
+                        .map(|&opt| (true, Type::ConstText(opt)))
+                } else {
+                    None
+                }
             },
             Type::RangedCmd(opts) => {
                 self.to_str()
                     .parse().ok()
                     .filter(|c| opts.contains(&c))
-                    .then_always(|c| Type::ConstCmd(c))
+                    .map(|c| (true, Type::ConstCmd(c)))
             },
             Type::RangedCount(_ranges) => todo!(),
 
-            Type::ConstText(v) => matches!(self as &[Token], [tkn] if tkn.is_str() && tkn.src == *v).then_always(|| *into),
-            Type::ConstCmd(v) => self.to_str().parse().ok().is_some_and(|c: Cmd| c == *v).then_always(|| *into),
+            Type::ConstText(v) => matches!(self as &[Token], [tkn] if tkn.is_str() && tkn.src == *v).then(|| (true, *into)),
+            Type::ConstIdent(v) => matches!(self as &[Token], [tkn] if tkn.is_ident() && tkn.src == *v).then(|| (true, *into)),
+            Type::ConstCmd(v) => self.to_str().parse().ok().is_some_and(|c: Cmd| c == *v).then(|| (true, *into)),
             Type::ConstCount(v) => if let [tkn] = self as &[Token] {
                 tkn.is_number() && tkn.src.parse().is_ok_and(|n: usize| n == *v)
             } else {
                 false
-            }.then_always(|| *into),
+            }.then(|| (true, *into)),
             Type::ConstBool(v) => if let [tkn] = self as &[Token] {
                 matches!((v, tkn.src), (true, "true"|"1") | (false, "false"|"0"))
             } else {
                 false
-            }.then_always(|| *into),
-            Type::ConstColor(v)  => self.to_str().parse().ok().is_some_and(|RichColor(x)| &x == v).then_always(|| *into),
-            Type::ConstCoords(v) => self.to_str().parse().ok().is_some_and(|Coords(x)| &x == v).then_always(|| *into),
-            Type::ConstTempo(v)  => self.to_str().parse().ok().is_some_and(|x: Tempo| &x == v).then_always(|| *into),
+            }.then(|| (true, *into)),
+            Type::ConstTempo(v)  => self.to_str().parse().ok().is_some_and(|x: Tempo| &x == v).then(|| (true, *into)),
         }
     }
 }
 
 impl CoerceArg for Type {
-    fn coerce_arg(&self, into: &Type) -> Coercion<Type> {
-        use Coercion::*;
-
+    fn coerce_arg(&self, into: &Type) -> Option<(bool, Type)> {
         match (into, self) {
             | (Type::Any, _)
             | (Type::Text, Self::Text | Self::RangedText(_) | Self::ConstText(_))
             | (Type::Cmd, Self::Cmd | Self::RangedCmd(_) | Self::ConstCmd(_))
             | (Type::Count, Self::Count | Self::RangedCount(_) | Self::ConstCount(_))
             | (Type::Bool, Self::Bool | Self::ConstBool(_))
-            | (Type::Color, Self::Color | Self::ConstColor(_))
-            | (Type::Coords, Self::Coords | Self::ConstCoords(_))
             | (Type::Tempo, Self::Tempo | Self::ConstTempo(_))
             | (Type::RangedText(_), Self::Text)
             | (Type::RangedCmd(_), Self::Cmd)
             | (Type::RangedCount(_), Self::Count)
-                => Always(*self),
+                => Some((true, *self)),
 
             // todo
 

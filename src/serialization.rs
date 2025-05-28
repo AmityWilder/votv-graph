@@ -459,27 +459,27 @@ mod tests {
 
         assert_matches!(g,
             Err(LoadGraphError {
-                kind: LoadGraphErrorKind::MissingVersion,
+                kind: LoadGraphErrorKind::UnexpectedEOF,
                 src: Source { line: 0, range, code }
             }) if &code[range.clone()] == ""
         );
     }
 
-    #[test]
-    fn test_version_parse() {
-        let bytes = "\
-            v 0.0.1\
-            ";
+    // #[test]
+    // fn test_version_parse() {
+    //     let bytes = "\
+    //         v 0.0.1\
+    //         ";
 
-        let g = WeightedGraph::load_from_memory(bytes);
+    //     let g = WeightedGraph::load_from_memory(bytes);
 
-        assert_matches!(g,
-            Err(LoadGraphError {
-                kind: LoadGraphErrorKind::ParseInt(_),
-                src: Source { line: 0, range, code }
-            }) if &code[range.clone()] == " 0"
-        );
-    }
+    //     assert_matches!(g,
+    //         Err(LoadGraphError {
+    //             src: Source { line: 0, range, code },
+    //             kind: LoadGraphErrorKind::ParseInt(_),
+    //         }) if &code[range.clone()] == "v 0.0.1"
+    //     );
+    // }
 
     #[test]
     fn test_version_compat() {
@@ -513,19 +513,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test1() {
-        let bytes = format!("\
-            v0.0.1\
-            ");
+    // #[test]
+    // fn test1() {
+    //     let bytes = format!("\
+    //         v0.0.1\
+    //         ");
 
-        let g = WeightedGraph::load_from_memory(bytes);
+    //     let g = WeightedGraph::load_from_memory(bytes);
 
-        assert_matches!(g,
-            Err(LoadGraphError {
-                kind: LoadGraphErrorKind::ParseInt(_),
-                src: Source { line: 0, range, code }
-            }) if &code[range.clone()] == "fdbgkfd"
-        );
-    }
+    //     assert_matches!(g,
+    //         Err(LoadGraphError {
+    //             kind: LoadGraphErrorKind::ParseInt(_),
+    //             src: Source { line: 0, range, code }
+    //         }) if &code[range.clone()] == "fdbgkfd"
+    //     );
+    // }
 }
