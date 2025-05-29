@@ -15,6 +15,7 @@
     array_try_map,
     pattern,
     slice_as_array,
+    decl_macro,
 )]
 
 use std::num::NonZeroU128;
