@@ -1,5 +1,5 @@
 [workspace]
-members = ["iter"]
+members = ["iter", "textedit"]
 
 [package]
 name = "votv-graph"
@@ -9,3 +9,4 @@ edition = "2024"
 [dependencies]
 raylib = "5.5.1"
 iter = { path = "iter" }
+textedit = { path = "textedit" }
