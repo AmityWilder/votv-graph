@@ -78,7 +78,7 @@ impl WeightedGraph {
     }
 
     pub fn add_edge(&mut self, a: VertexID, b: VertexID) {
-        let weight = self.verts[a as usize].pos.distance_to(self.verts[b as usize].pos);
+        let weight = self.verts[a as usize].pos.distance(self.verts[b as usize].pos);
         self.edges.push(Edge {
             adj: [a, b],
             weight,

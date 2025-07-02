@@ -635,7 +635,7 @@ fn run_focus_vertex(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut Pro
 
 fn run_focus_reset(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
     if matches!(args, ["reset"]) {
-        data.orbit.target = Vector3::zero();
+        data.orbit.target = Vector3::ZERO;
         data.orbit.length = CAMERA_LENGTH_DEFAULT;
         Ok(CmdPromise::Ready(CmdReturn::void()))
     } else {

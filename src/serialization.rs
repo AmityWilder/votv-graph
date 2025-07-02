@@ -257,7 +257,7 @@ fn parse_edge<'a, 'src: 'a>(
     let weight_start = weight_str.chars().next();
     let weight =
         if weight_start.is_none_or(|ch| matches!(ch, '*'|'+')) {
-            let distance = verts[adj[0] as usize].pos.distance_to(verts[adj[1] as usize].pos);
+            let distance = verts[adj[0] as usize].pos.distance(verts[adj[1] as usize].pos);
             if let Some(ch) = weight_start {
                 weight_str = weight_str[1..].trim_start();
                 let weight_aug = weight_str.parse::<f32>()

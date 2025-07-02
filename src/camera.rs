@@ -1,4 +1,4 @@
-use raylib::prelude::*;
+use raylib::{math::glam::Quat, prelude::*};
 
 pub struct Orbiter {
     pub target: Vector3,
@@ -20,7 +20,7 @@ impl Orbiter {
     }
 
     pub fn position(&self) -> Vector3 {
-        let q = Quaternion::from_euler(self.pitch, self.yaw, 0.0);
-        self.target + Vector3::new(0.0, 0.0, -self.length).rotate_by(q)
+        let q = Quat::from_euler(glam::EulerRot::XYZ, self.pitch, self.yaw, 0.0);
+        self.target + q.mul_vec3(Vector3::new(0.0, 0.0, -self.length))
     }
 }

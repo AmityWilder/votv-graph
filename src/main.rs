@@ -57,7 +57,7 @@ fn main() {
         is_debugging: false,
         graph: WeightedGraph::new(Vec::new(), Vec::new()),
         route: None,
-        orbit: Orbiter::new(Vector3::zero(), CAMERA_LENGTH_DEFAULT, 0.0, 0.0),
+        orbit: Orbiter::new(Vector3::ZERO, CAMERA_LENGTH_DEFAULT, 0.0, 0.0),
         tempo: Tempo::new(),
         interactive_targets: Vec::new(),
         is_giving_interactive_targets: false,
@@ -327,12 +327,12 @@ fn main() {
                 let pos = d.get_world_to_screen(vert.pos, camera);
                 let text = vert.alias.as_str();
                 let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
-                d.draw_text_ex(&font, text, (pos - rvec2(text_size.x*0.5, font.baseSize/2))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
+                d.draw_text_ex(&font, text, (pos - Vector2::new(text_size.x*0.5, font.baseSize as f32*0.5))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
                 if let Some(route) = &route {
                     if let Some(Visit { distance, parent }) = route.get_visit(v) {
                         let parent_text = parent.map_or("-", |p| &data.graph.vert(p).alias);
                         let text = format!("{} ({parent_text})", distance.ceil());
-                        d.draw_text_ex(&font, &text, (pos + rvec2(text_size.x*0.5 + 3.0, 3))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
+                        d.draw_text_ex(&font, &text, (pos + Vector2::new(text_size.x*0.5 + 3.0, 3.0))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
                     }
                 }
             }
@@ -346,7 +346,7 @@ fn main() {
             let mut d = d.begin_shader_mode(&mut shader);
             let src = Rectangle::new(0.0, 0.0, framebuffer.width() as f32, -framebuffer.height() as f32);
             let dst = Rectangle::new(0.0, 0.0, d.get_screen_width() as f32, d.get_screen_height() as f32);
-            d.draw_texture_pro(&framebuffer, src, dst, Vector2::zero(), 0.0, Color::WHITE);
+            d.draw_texture_pro(&framebuffer, src, dst, Vector2::ZERO, 0.0, Color::WHITE);
         }
 
         // Console

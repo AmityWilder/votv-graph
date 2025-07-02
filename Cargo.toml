@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-raylib = "5.5.1"
+raylib = { git = "https://github.com/raylib-rs/raylib-rs.git", branch = "unstable" }
