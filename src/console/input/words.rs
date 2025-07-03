@@ -56,7 +56,7 @@ impl<'a> DoubleEndedIterator for Words<'a> {
         if self.src.is_empty() { return None; }
         let st = self.src.trim_end();
         let mid = if let Some(last_char) = st.chars().next_back() {
-            let trimmed_len = if is_word_char(last_char) {
+            if is_word_char(last_char) {
                 st.trim_end_matches(is_word_char).len()
             } else {
                 let trimmed = st.trim_end_matches(last_char);
@@ -66,8 +66,7 @@ impl<'a> DoubleEndedIterator for Words<'a> {
                     .and_then(|(a, _)| trimmed.strip_suffix(a))
                     .unwrap_or(trimmed)
                     .len()
-            };
-            trimmed_len
+            }
         } else {
             self.src.len()
         };

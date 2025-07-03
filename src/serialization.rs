@@ -48,7 +48,7 @@ impl<'a, 'src: 'a> Source<&'src str> {
             line,
             range: code.substr_range(substr)
                 .expect("`substr` should be a slice within `code`"),
-            code: code.into(),
+            code,
         }
     }
 }
@@ -249,8 +249,8 @@ fn parse_edge<'a, 'src: 'a>(
     (b, weight_str) = b.split_once(':').unwrap_or((b, ""));
 
     let adj = [
-        find_vert(&verts, line, code, a.trim())?,
-        find_vert(&verts, line, code, b.trim())?,
+        find_vert(verts, line, code, a.trim())?,
+        find_vert(verts, line, code, b.trim())?,
     ];
 
     weight_str = weight_str.trim();
@@ -418,8 +418,8 @@ impl WeightedGraph {
 
     pub fn save_to_memory(&self) -> String {
         std::iter::once(format!("v{CURRENT_VERSION}"))
-            .chain(self.verts().into_iter().map(|v| format!("{}:{}={},{},{}", &v.id, &v.alias, v.pos.x, v.pos.y, v.pos.z)))
-            .chain(self.edges().into_iter().map(|e| {
+            .chain(self.verts().iter().map(|v| format!("{}:{}={},{},{}", &v.id, &v.alias, v.pos.x, v.pos.y, v.pos.z)))
+            .chain(self.edges().iter().map(|e| {
                 fn shorter<'a>(str1: &'a str, str2: &'a str) -> &'a str {
                     if str1.len() < str2.len() { str1 } else { str2 }
                 }

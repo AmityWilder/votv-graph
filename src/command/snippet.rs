@@ -1,3 +1,5 @@
+#![allow(dead_code, reason = "WIP")]
+
 pub struct Snippet<'a> {
     pub text: std::borrow::Cow<'a, str>,
     pub insertion_ranges: Vec<std::ops::Range<usize>>,
@@ -26,7 +28,7 @@ impl<'a> Snippet<'a> {
 
     pub fn new(text: &'a str) -> Self {
         Self {
-            insertion_ranges: Self::make_insertion_ranges(&text),
+            insertion_ranges: Self::make_insertion_ranges(text),
             text: std::borrow::Cow::Borrowed(text),
         }
     }

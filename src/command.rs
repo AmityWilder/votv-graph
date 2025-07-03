@@ -1,7 +1,7 @@
 use std::{ops::ControlFlow, str::FromStr, task::Poll};
 use raylib::prelude::*;
 // use snippet::Snippet;
-use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
+use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{Coords, ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
 
 pub mod snippet;
 // pub mod exec;
@@ -169,12 +169,12 @@ define_commands!{
         #[help = "Display more specific information about a specific command."]
         One(run_help_one),
     },
-    #[input = "close"]
+    #[input = "quit"]
     #[help = "Close the application."]
-    Close {
+    Quit {
         #[template = ""]
         #[help = "Close the application immediately."]
-        Basic(run_close),
+        Basic(run_quit),
     },
     #[input = "cls"]
     #[help = "Clear the console."]
@@ -286,7 +286,8 @@ define_commands!{
     #[help = "Create a new edge."]
     SvEdge {
         #[template = "<ID|ALIAS> [--] <ID|ALIAS>..."]
-        #[help = "Create two-way edges connecting the prior vertex to each of the following vertices not separated by `--`s. A vertex cannot have an edge to itself. \
+        #[help = "Create two-way edges connecting the prior vertex to each of the following vertices not separated by `--`s.
+                  A vertex cannot have an edge to itself and two vertices cannot connect to each other more than once.\
                   When one or more vertices not separated with `--`s are followed by a `--`, each vertex in that subset will be connected to each vertex in the following subset."]
         Basic(run_sv_edge),
     },
@@ -316,7 +317,10 @@ define_commands!{
                   - `sprint`: set the tempo to the fastest possible while keeping the current framerate.\n\
                   - `instant`: set the tempo to 1 tick per 0 milliseconds, blocking until the route is completed.\n\
                   - `pause`: set the tempo to 0 ticks per millisecond."]
-        Basic(run_tempo),
+        Set(run_tempo_set),
+        #[template = ""]
+        #[help = "Print the current tempo of the route generator or pass it as an argument to the next command in the pipeline."]
+        Print(run_tempo_print),
     },
     #[input = "skip"]
     #[help = "Repeat all but the first n arguments."]
@@ -458,6 +462,14 @@ pub enum CmdRetDisplay {
     ColorEdges,
     ColorBackground,
     SvRouteImmediate,
+    SvRouteList,
+    SvRouteClear,
+    SvNew,
+    SvEdge,
+    SvLoad,
+    SvSave,
+    TempoSet,
+    TempoPrint,
 }
 
 impl CmdRetDisplay {
@@ -490,6 +502,14 @@ impl CmdRetDisplay {
                 //     *i += 1;
                 // }
                 // console_log!(cout, Route, "total distance: {distance}");
+            Self::SvRouteList => console_log!(cout, Info, "current route: {}", args.join(", ")),
+            Self::SvRouteClear => console_log!(cout, Info, "route cleared"),
+            Self::SvNew => console_log!(cout, Info, "created vertex"),
+            Self::SvEdge => console_log!(cout, Info, "created edge"),
+            Self::SvLoad => console_log!(cout, Info, "graph loaded"),
+            Self::SvSave => console_log!(cout, Info, "graph saved"),
+            Self::TempoSet => console_log!(cout, Info, "updated tempo"),
+            Self::TempoPrint => console_log!(cout, Info, "current tempo: {}", data.tempo),
         }
     }
 }
@@ -525,7 +545,7 @@ fn run_help_all(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut Progra
 
 impl Cmd {
     fn help_msg(self) -> String {
-        let template_column_width = self.usage_list().into_iter()
+        let template_column_width = self.usage_list().iter()
             .map(|usage| self.input().len() + if !usage.template().is_empty() { usage.template().len() + 1 } else { 0 })
             .max()
             .unwrap() + 2;
@@ -577,7 +597,7 @@ fn run_help_one(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut Progra
     }
 }
 
-fn run_close(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+fn run_quit(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
     if args.is_empty() {
         data.should_close = true;
         Ok(CmdPromise::Ready(CmdReturn::void()))
@@ -596,7 +616,7 @@ fn run_cls(cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData,
 }
 
 fn run_echo(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Ok(CmdPromise::Ready(CmdReturn::new(args.into_iter().map(<&str>::to_string).collect(), CmdRetDisplay::Echo)))
+    Ok(CmdPromise::Ready(CmdReturn::new(args.iter().map(<&str>::to_string).collect(), CmdRetDisplay::Echo)))
 }
 
 fn run_dbg_toggle(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
@@ -611,7 +631,7 @@ fn run_dbg_toggle(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut Progr
 fn run_dbg_set(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
     if let [set_arg] = args {
         data.is_debugging = set_arg.parse::<bool>()
-            .map_err(|e| CmdError::ParseBool(e))?;
+            .map_err(CmdError::ParseBool)?;
 
         Ok(CmdPromise::Ready(CmdReturn::new(vec![if data.is_debugging { "true" } else { "false" }.to_string()], CmdRetDisplay::Dbg)))
     } else {
@@ -658,7 +678,7 @@ fn run_color_verts_general(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &
     if let [color_arg] = args {
         data.verts_color = color_arg.parse::<RichColor>()
             .map(|RichColor(c)| c)
-            .map_err(|e| CmdError::ParseColor(e))?;
+            .map_err(CmdError::ParseColor)?;
         Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::ColorVertsGeneral)))
     } else {
         Err(CmdError::CheckUsage(Cmd::ColorVerts))
@@ -673,7 +693,7 @@ fn run_color_edges(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut Prog
     if let [color_arg] = args {
         data.edges_color = color_arg.parse::<RichColor>()
             .map(|RichColor(c)| c)
-            .map_err(|e| CmdError::ParseColor(e))?;
+            .map_err(CmdError::ParseColor)?;
         Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::ColorEdges)))
     } else {
         Err(CmdError::CheckUsage(Cmd::ColorVerts))
@@ -684,7 +704,7 @@ fn run_color_background(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut
     if let [color_arg] = args {
         data.background_color = color_arg.parse::<RichColor>()
             .map(|RichColor(c)| c)
-            .map_err(|e| CmdError::ParseColor(e))?;
+            .map_err(CmdError::ParseColor)?;
         Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::ColorBackground)))
     } else {
         Err(CmdError::CheckUsage(Cmd::ColorVerts))
@@ -723,12 +743,26 @@ fn run_sv_route_interactive(cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &m
     }
 }
 
-fn run_sv_route_add_immediate(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_sv_route_add_immediate(cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if !args.is_empty() && !matches!(args, ["-i"|"interactive", ..]) {
+        if let Some(route) = &mut data.route {
+            let targets = args.iter()
+                .map(|s| s.parse_vert(&data.graph))
+                .collect::<Result<Vec<VertexID>, CmdError>>()?;
+
+            route.add_targets(cout, targets);
+            console_log!(cout, Info, "generating route...");
+            Ok(CmdPromise::Route)
+        } else {
+            Err(CmdError::NoExistingRoute)
+        }
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvRoute))
+    }
 }
 
 fn run_sv_route_add_interactive(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    if matches!(args, ["-i"|"interactive"]) {
+    if matches!(args, ["-i"|"--interactive"|"interactive"]) {
         data.is_giving_interactive_targets = true;
         Ok(CmdPromise::InteractiveTargets)
     } else {
@@ -736,38 +770,155 @@ fn run_sv_route_add_interactive(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, da
     }
 }
 
-fn run_sv_route_list(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_sv_route_list(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if args.is_empty() {
+        if let Some(route) = &data.route {
+            let list = route
+                .result()
+                .iter()
+                .copied()
+                .map(|id| data.graph.vert(id).id.clone())
+                .collect();
+            Ok(CmdPromise::Ready(CmdReturn::new(list, CmdRetDisplay::SvRouteList)))
+        } else {
+            Err(CmdError::NoExistingRoute)
+        }
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvRouteList))
+    }
 }
 
-fn run_sv_route_clear(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_sv_route_clear(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if args.is_empty() {
+        data.route = None;
+        Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::SvRouteClear)))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvRouteClear))
+    }
 }
 
-fn run_sv_new(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_sv_new(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    let (id, alias, pos) = match *args {
+        [id, alias, pos] => (id, alias, pos),
+        [id, pos] => (id, id, pos),
+        _ => return Err(CmdError::CheckUsage(Cmd::SvNew)),
+    };
+    let Coords(pos) = pos.parse()
+        .map_err(CmdError::ParseCoords)?;
+
+    let id_and_alias = [id, alias];
+    let id_and_alias_unique = &id_and_alias[0..=(id != alias) as usize];
+
+    // invalid name
+    for name in id_and_alias_unique {
+        if let Some(reserved) = ReservedName::find(name) {
+            return Err(CmdError::BadVertexName(reserved));
+        }
+    }
+
+    // duplicate name
+    for name in id_and_alias_unique {
+        if data.graph.find_vert(name).is_some() {
+            return Err(CmdError::DuplicateVertexName(name.to_string()));
+        }
+    }
+
+    data.graph.add_vertex(id, alias, pos);
+
+    Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::SvNew)))
 }
 
-fn run_sv_edge(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_sv_edge(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if args.len() >= 2 && !matches!(args, ["--", ..] | [.., "--"]) && !args.array_windows::<2>().any(|pair| matches!(pair, ["--", "--"])) {
+        let groups = args.split(|arg| *arg == "--")
+            .map(|group|
+                group.iter()
+                    .map(|name|
+                        data.graph.find_vert(name)
+                            .ok_or_else(|| CmdError::VertexDNE(name.to_string()))
+                    )
+                    .collect::<Result<Box<[VertexID]>, CmdError>>()
+            )
+            .collect::<Result<Box<[Box<[VertexID]>]>, CmdError>>()?;
+
+        // ex:
+        // a -- b => a--b
+        // a -- b c => a--b a--c
+        // a b -- c => a--c b--c
+        // a b -- c d => a--c a--d b--c b--d
+        // a b -- c d -- e f => a--c a--d b--c b--d c--e c--f d--e d--f
+
+        let mut e = false;
+        for [g1, g2] in groups.array_windows::<2>() {
+            for a in g1.iter().copied() {
+                for b in g2.iter().copied() {
+                    if a != b && !data.graph.adjacent(a).iter().any(|adj| adj.vertex == b) {
+                        data.graph.add_edge(a, b);
+                    } else {
+                        e = true;
+                    }
+                }
+            }
+        }
+        if e {
+            Err(CmdError::EdgeLoop) // all valid connections are made, but error at the end because otherwise some might be added while others aren't
+        } else {
+            Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::SvEdge)))
+        }
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvEdge))
+    }
 }
 
-fn run_sv_load(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_sv_load(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if let [path] = args {
+        let s = std::fs::read_to_string(path)
+            .map_err(CmdError::IOError)?;
+        data.graph = WeightedGraph::load_from_memory(&s)
+            .map_err(CmdError::LoadGraph)?;
+        Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::SvLoad)))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvLoad))
+    }
 }
 
-fn run_sv_save(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_sv_save(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if let [path] = args {
+        let s = data.graph.save_to_memory();
+        std::fs::write(path, s)
+            .map_err(CmdError::IOError)?;
+        Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::SvSave)))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::SvLoad))
+    }
 }
 
-fn run_tempo(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
-    Err(CmdError::Todo)
+fn run_tempo_set(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if let [arg] = args {
+        match arg.parse() {
+            Ok(tempo) => {
+                data.tempo = tempo;
+                Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::TempoSet)))
+            }
+            Err(e) => Err(CmdError::ParseTempo(e)),
+        }
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Tempo))
+    }
+}
+
+fn run_tempo_print(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
+    if args.is_empty() {
+        Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::TempoPrint)))
+    } else {
+        Err(CmdError::CheckUsage(Cmd::Tempo))
+    }
 }
 
 fn run_skip(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
     if let [n_arg, rest @ ..] = args && n_arg.chars().all(char::is_numeric) {
-        let n = n_arg.parse::<usize>().map_err(|e| CmdError::ParseInt(e))?;
-        Ok(CmdPromise::Ready(CmdReturn::pure(rest.into_iter().skip(n).map(<&str>::to_string).collect())))
+        let n = n_arg.parse::<usize>().map_err(CmdError::ParseInt)?;
+        Ok(CmdPromise::Ready(CmdReturn::pure(rest.iter().skip(n).map(<&str>::to_string).collect())))
     } else {
         Err(CmdError::CheckUsage(Cmd::Skip))
     }
@@ -775,19 +926,77 @@ fn run_skip(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramDat
 
 fn run_take(_cout: &mut ConsoleOut, _cin: &mut ConsoleIn, _data: &mut ProgramData, args: &[&str]) -> Result<CmdPromise, CmdError> {
     if let [n_arg, rest @ ..] = args && n_arg.chars().all(char::is_numeric) {
-        let n = n_arg.parse::<usize>().map_err(|e| CmdError::ParseInt(e))?;
-        Ok(CmdPromise::Ready(CmdReturn::pure(rest.into_iter().take(n).map(<&str>::to_string).collect())))
+        let n = n_arg.parse::<usize>().map_err(CmdError::ParseInt)?;
+        Ok(CmdPromise::Ready(CmdReturn::pure(rest.iter().take(n).map(<&str>::to_string).collect())))
     } else {
         Err(CmdError::CheckUsage(Cmd::Take))
     }
 }
 
+macro_rules! reserved_names {
+    (
+        $(#[$m:meta])*
+        $vis:vis enum $Enum:ident {
+            $(
+                #[reason = $reason:expr]
+                $(#[$vm:meta])*
+                $Variant:ident = $name:literal
+            ),* $(,)?
+        }
+    ) => {
+        $(#[$m])*
+        $vis enum $Enum {
+            $(
+                $(#[$vm])*
+                $Variant,
+            )*
+        }
 
+        impl $Enum {
+            pub fn find(name: &str) -> Option<Self> {
+                match name {
+                    $($name => Some(Self::$Variant),)*
+                    _ => None,
+                }
+            }
+
+            pub const fn reason(&self) -> &'static str {
+                match self {
+                    $(Self::$Variant => $reason,)*
+                }
+            }
+        }
+
+        impl std::fmt::Display for $Enum {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self { $(Self::$Variant => $name,)* }.fmt(f)
+            }
+        }
+    };
+}
+
+reserved_names!{
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ReservedName {
+        #[reason = "used by `sv.route` for generating routes interactively"]
+        Interactive = "interactive",
+
+        #[reason = "may be mistaken for a \'help\' request on another command"]
+        Help = "help",
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum CmdError {
+    /// Not yet implemented
+    Todo,
     CheckUsage(Cmd),
     VertexDNE(String),
+    DuplicateVertexName(String),
+    BadVertexName(ReservedName),
     NoExistingRoute,
+    EdgeLoop,
     ParseCoords(ParseCoordsError),
     ParseColor(ParseColorError),
     ParseBool(std::str::ParseBoolError),
@@ -797,15 +1006,18 @@ pub enum CmdError {
     LoadGraph(LoadGraphError),
     NoSuchCmd(String),
     IOError(std::io::Error),
-    Todo,
 }
 
 impl std::fmt::Display for CmdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
+            Self::Todo => f.write_str("not yet implemented"),
             Self::CheckUsage(cmd) => f.write_str(cmd.help_msg().as_str()),
             Self::VertexDNE(id) => write!(f, "vertex \"{id}\" does not exist"),
-            Self::NoExistingRoute => f.write_str("no ongoing route to extend"),
+            Self::BadVertexName(name) => write!(f, "vertices cannot be named \"{name}\". reason: {}", name.reason()),
+            Self::DuplicateVertexName(name) => write!(f, "the name \"{name}\" is already in use by an existing vertex"),
+            Self::NoExistingRoute => f.write_str("no route currently exists"),
+            Self::EdgeLoop => f.write_str("vertices cannot have duplicate edges or edges to themselves"),
             Self::ParseCoords(_) => f.write_str("could not parse coordinates"),
             Self::ParseColor(_) => f.write_str("could not parse color"),
             Self::ParseBool(_) => f.write_str("could not parse boolean"),
@@ -815,7 +1027,6 @@ impl std::fmt::Display for CmdError {
             Self::LoadGraph(_) => f.write_str("could not load graph"),
             Self::NoSuchCmd(cmd) => write!(f, "no such command `{cmd}`"),
             Self::IOError(_) => f.write_str("filesystem IO error"),
-            Self::Todo => f.write_str("not yet implemented"),
         }
     }
 }
@@ -823,11 +1034,14 @@ impl std::fmt::Display for CmdError {
 impl std::error::Error for CmdError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            | Self::Todo
             | Self::CheckUsage(_)
             | Self::VertexDNE(_)
+            | Self::BadVertexName(_)
+            | Self::DuplicateVertexName(_)
             | Self::NoExistingRoute
+            | Self::EdgeLoop
             | Self::NoSuchCmd(_)
-            | Self::Todo
                 => None,
 
             Self::ParseCoords(e) => Some(e),

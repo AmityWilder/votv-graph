@@ -1,8 +1,14 @@
 use std::{error::Error, fmt::{self, Display, Formatter}, num::{NonZeroU32, ParseFloatError, ParseIntError}, str::FromStr};
 use raylib::prelude::*;
 
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct NonNaNF32(f32);
+
+impl PartialOrd for NonNaNF32 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl Ord for NonNaNF32 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -83,20 +89,20 @@ impl Error for ParseCoordsError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Coords(Vector3);
+pub struct Coords(pub Vector3);
 
 impl FromStr for Coords {
     type Err = ParseCoordsError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut it = s.split('/')
-            .zip(["x:", "y:", "z:"].into_iter())
+            .zip(["x:", "y:", "z:"])
             .map(|(s, pre)| s
                 .strip_prefix(pre)
                 .ok_or(ParseCoordsError::Invalid)
                 .and_then(|n| n
                     .parse::<f32>()
-                    .map_err(|e| ParseCoordsError::ParseFloat(e))
+                    .map_err(ParseCoordsError::ParseFloat)
                 )
             );
 
@@ -152,13 +158,13 @@ impl FromStr for Tempo {
             "pause" => Self::Pause,
             _ => {
                 let mut it = s.split('/')
-                    .zip(["ticks:", "ms:"].into_iter())
+                    .zip(["ticks:", "ms:"])
                     .map(|(s, pre)| s
                         .strip_prefix(pre)
                         .ok_or(ParseTempoError::Invalid)
                         .and_then(|n| n
                             .parse::<u32>()
-                            .map_err(|e| ParseTempoError::ParseInt(e))
+                            .map_err(ParseTempoError::ParseInt)
                         )
                     );
 
@@ -417,7 +423,7 @@ impl std::str::FromStr for RichColor {
                 )
                 .map(|item|
                     u8::from_str_radix(item, 0x10)
-                        .map_err(|e| ParseColorError::BadInt(e))
+                        .map_err(ParseColorError::BadInt)
                 );
 
             let [r, g, b] = it.next_chunk().expect("should be guarded by chunk_size");
@@ -429,8 +435,8 @@ impl std::str::FromStr for RichColor {
                     .split(',')
                     .map(|x| x.trim_matches(' '))
                     .map(|item|
-                        u8::from_str_radix(item, 10)
-                            .map_err(|e| ParseColorError::BadInt(e))
+                        item.parse()
+                            .map_err(ParseColorError::BadInt)
                     )
                     .next_chunk()
                         .map_err(|_| ParseColorError::BadComponentCount)?;
@@ -447,16 +453,16 @@ impl std::str::FromStr for RichColor {
                     .enumerate()
                     .map(|(n, item)|
                         if n < 3 {
-                            u8::from_str_radix(item, 10)
-                                .map_err(|e| ParseColorError::BadInt(e))
+                            item.parse()
+                                .map_err(ParseColorError::BadInt)
                         } else {
-                            u8::from_str_radix(item, 10)
+                            item.parse()
                                 .or_else(|_|
                                     item.parse::<f32>()
-                                        .map_err(|e| ParseColorError::BadFloat(e))
+                                        .map_err(ParseColorError::BadFloat)
                                         .and_then(|a|
                                             u8::try_from((a * 255.0) as i32)
-                                                .map_err(|e| ParseColorError::BadConversion(e))
+                                                .map_err(ParseColorError::BadConversion)
                                         )
                                 )
 

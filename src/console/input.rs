@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ops::Range, time::{Duration, Instant}};
 use raylib::prelude::*;
-use crate::{command::Cmd, console_log};
+use crate::console_log;
 
 use KeyboardKey::*;
 
@@ -146,13 +146,11 @@ impl ConsoleIn {
 
                 if is_ctrl_down {
                     match key {
-                        KEY_C | KEY_X => if self.selection_head != self.selection_tail {
-                            if rl.set_clipboard_text(&self.current[self.selection_range()]).is_ok() {
-                                if key == KEY_X {
-                                    self.insert_over_selection("");
-                                }
-                                return true;
+                        KEY_C | KEY_X => if self.selection_head != self.selection_tail && rl.set_clipboard_text(&self.current[self.selection_range()]).is_ok() {
+                            if key == KEY_X {
+                                self.insert_over_selection("");
                             }
+                            return true;
                         }
 
                         KEY_V => if let Some(clipboard) = {
@@ -185,7 +183,7 @@ impl ConsoleIn {
 
                 let erasure = (key == KEY_DELETE) as i8 - (key == KEY_BACKSPACE) as i8;
                 if erasure != 0 {
-                    if self.selection_range().len() == 0 {
+                    if self.selection_range().is_empty() {
                         let size = is_ctrl_down.then_some(())
                             .and_then(|()| {
                                 let mid = self.selection_tail;
@@ -249,6 +247,7 @@ impl ConsoleIn {
                                 .map_or(1, |s| s.chars().count());
 
                             let selection_range = self.selection_range();
+                            #[allow(clippy::collapsible_else_if, reason = "more apparent parallel")]
                             if !is_shift_down && !selection_range.is_empty() {
                                 if x_movement > 0 {
                                     selection_range.end
@@ -280,10 +279,8 @@ impl ConsoleIn {
     }
 
     pub fn update_input(&mut self, rl: &mut RaylibHandle) -> bool {
-        if let Some((rep_input, _)) = &self.last_keypress {
-            if rep_input.to_key().is_none_or(|k| rl.is_key_released(k)) {
-                self.last_keypress = None;
-            }
+        if let Some((rep_input, _)) = &self.last_keypress && rep_input.to_key().is_none_or(|k| rl.is_key_released(k)) {
+            self.last_keypress = None;
         }
 
         if self.is_focused {
@@ -292,7 +289,7 @@ impl ConsoleIn {
             let is_alt_down = rl.is_key_down(KEY_LEFT_ALT) || rl.is_key_down(KEY_RIGHT_ALT);
 
             let input = rl.get_char_pressed().map_or_else(
-                || rl.get_key_pressed().map(|k| KeyOrChar::Key(k)),
+                || rl.get_key_pressed().map(KeyOrChar::Key),
                 |c| Some(KeyOrChar::Char(c)),
             );
 

@@ -10,7 +10,9 @@
     impl_trait_in_assoc_type,
     associated_type_defaults,
     let_chains,
+    array_windows,
 )]
+#![warn(clippy::style)]
 
 use std::num::NonZeroU128;
 use std::time::{Duration, Instant};
@@ -18,10 +20,10 @@ use camera::Orbiter;
 use console::input::ConsoleIn;
 use console::output::ConsoleOut;
 use console::{console_log, enrich::EnrichEx, output::ConsoleLineCategory};
-use command::{Cmd, ProgramData, Routine};
-use graph::{VertexID, WeightedGraph};
+use command::{ProgramData, Routine};
+use graph::{WeightedGraph};
 use raylib::prelude::*;
-use route::{RouteGenerator, VertexClass, Visit};
+use route::{VertexClass, Visit};
 use types::Tempo;
 
 mod camera;
@@ -202,15 +204,13 @@ fn main() {
                 rl.get_mouse_position()
             };
 
-        if data.is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
-            if let Some(v) = hovered_vert {
-                if let Some(p) = data.interactive_targets.iter().position(|x| x == &v) {
-                    console_log!(cout, Info, "removing vertex {} from route", data.graph.vert(v).id);
-                    data.interactive_targets.remove(p);
-                } else {
-                    console_log!(cout, Info, "adding vertex {} to route", data.graph.vert(v).id);
-                    data.interactive_targets.push(v);
-                }
+        if data.is_giving_interactive_targets && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) && let Some(v) = hovered_vert {
+            if let Some(p) = data.interactive_targets.iter().position(|x| x == &v) {
+                console_log!(cout, Info, "removing vertex {} from route", data.graph.vert(v).id);
+                data.interactive_targets.remove(p);
+            } else {
+                console_log!(cout, Info, "adding vertex {} to route", data.graph.vert(v).id);
+                data.interactive_targets.push(v);
             }
         }
 
@@ -302,10 +302,8 @@ fn main() {
 
                     // let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
                     d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, 10, 10, color);
-                    if let Some(route) = &route {
-                        if let Some(Visit { parent: Some(p), .. }) = route.get_visit(v) {
-                            d.draw_capsule(data.graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
-                        }
+                    if let Some(route) = &route && let Some(Visit { parent: Some(p), .. }) = route.get_visit(v) {
+                        d.draw_capsule(data.graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
                     }
                 }
 
@@ -328,12 +326,10 @@ fn main() {
                 let text = vert.alias.as_str();
                 let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
                 d.draw_text_ex(&font, text, (pos - Vector2::new(text_size.x*0.5, font.baseSize as f32*0.5))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
-                if let Some(route) = &route {
-                    if let Some(Visit { distance, parent }) = route.get_visit(v) {
-                        let parent_text = parent.map_or("-", |p| &data.graph.vert(p).alias);
-                        let text = format!("{} ({parent_text})", distance.ceil());
-                        d.draw_text_ex(&font, &text, (pos + Vector2::new(text_size.x*0.5 + 3.0, 3.0))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
-                    }
+                if let Some(route) = &route && let Some(Visit { distance, parent }) = route.get_visit(v) {
+                    let parent_text = parent.map_or("-", |p| &data.graph.vert(p).alias);
+                    let text = format!("{} ({parent_text})", distance.ceil());
+                    d.draw_text_ex(&font, &text, (pos + Vector2::new(text_size.x*0.5 + 3.0, 3.0))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
                 }
             }
         }
@@ -475,7 +471,7 @@ fn main() {
                 }
 
                 {
-                    const COLOR: Color = ConsoleLineCategory::Command.color_prefix().0;
+                    // const COLOR: Color = ConsoleLineCategory::Command.color_prefix().0;
                     const PREFIX_LEN: usize = ConsoleLineCategory::Command.color_prefix().1.len();
                     let row = sample.lines().count().saturating_sub(1);
                     let selection_y = SAFE_ZONE + row as f32*font_size;
@@ -485,7 +481,7 @@ fn main() {
                         (selection_range.len() as f32*char_step.x - spacing).max(0.0),
                         font_size,
                     );
-                    if selection_range.len() > 0 {
+                    if !selection_range.is_empty() {
                         d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.25));
                     } else if !cin.current().is_empty() && selection_tail == cin.current().len() {
                         // let it = Cmd::predict_cmd(cin.current());

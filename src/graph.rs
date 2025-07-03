@@ -68,13 +68,13 @@ impl WeightedGraph {
     pub fn verts_iter(&self) -> impl ExactSizeIterator<Item = (VertexID, &Vertex)> + DoubleEndedIterator {
         self.verts.iter()
             .enumerate()
-            .map(|(v, vert)| (VertexID::try_from(v).expect(&format!("greater than {} vertices is not supported", VertexID::MAX)), vert))
+            .map(|(v, vert)| (VertexID::try_from(v).unwrap_or_else(|_| panic!("greater than {} vertices is not supported", VertexID::MAX)), vert))
     }
 
-    pub fn find_vert<'a>(&self, id_or_alias: &'a str) -> Option<VertexID> {
+    pub fn find_vert(&self, id_or_alias: &str) -> Option<VertexID> {
         self.verts.iter()
             .position(|vert| vert.id.eq_ignore_ascii_case(id_or_alias) || vert.alias.eq_ignore_ascii_case(id_or_alias))
-            .map(|v| VertexID::try_from(v).expect(&format!("greater than {} vertices is not supported", VertexID::MAX)))
+            .map(|v| VertexID::try_from(v).unwrap_or_else(|_| panic!("greater than {} vertices is not supported", VertexID::MAX)))
     }
 
     pub fn add_edge(&mut self, a: VertexID, b: VertexID) {

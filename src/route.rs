@@ -15,7 +15,6 @@ pub enum Phase {
     Backtrack {
         parent: VertexID,
         insert_at: usize,
-        i: usize,
     },
 }
 
@@ -71,7 +70,7 @@ impl RouteGenerator {
         if let Phase::Edge { current, i } = &self.phase {
             if &v == current {
                 return Some(VertexClass::Current);
-            } else if graph.adjacent(*current).get(*i).is_some_and(|x| &v == &x.vertex) {
+            } else if graph.adjacent(*current).get(*i).is_some_and(|x| v == x.vertex) {
                 return Some(VertexClass::Adjacent);
             }
         }
@@ -122,7 +121,6 @@ impl RouteGenerator {
         self.phase = Phase::Backtrack {
             parent: self.root,
             insert_at,
-            i: 0,
         };
     }
 
@@ -160,13 +158,11 @@ impl RouteGenerator {
                         console_dbg!(cout, Info, 4, "new best");
                     }
                     *i += 1;
+                } else if let Some(next_vert) = self.queue.pop_front() {
+                    *current = next_vert;
+                    *i = 0;
                 } else {
-                    if let Some(next_vert) = self.queue.pop_front() {
-                        *current = next_vert;
-                        *i = 0;
-                    } else {
-                        self.begin_phase_target(cout);
-                    }
+                    self.begin_phase_target(cout);
                 }
             }
 
@@ -193,7 +189,7 @@ impl RouteGenerator {
                 }
             }
 
-            Phase::Backtrack { parent, insert_at, i: _ } => {
+            Phase::Backtrack { parent, insert_at } => {
                 if let Some(Visit { parent: Some(p), .. }) = &self.visited[*parent as usize] {
                     self.result.insert(*insert_at, *parent);
                     *parent = *p;
