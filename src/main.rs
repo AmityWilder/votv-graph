@@ -252,258 +252,261 @@ fn main() {
         let route = &data.route;
 
         {
-            let mut d = rl.begin_texture_mode(&thread, &mut framebuffer);
-            d.clear_background(data.background_color);
+            rl.draw_texture_mode(&thread, &mut framebuffer, |mut d| {
+                d.clear_background(data.background_color);
 
-            {
                 const SCALE_FACTOR: f32 = 1.0/(10.0*UPSCALE);
-                let mut d = d.begin_mode3D({
+                d.draw_mode3D({
                     let mut camera = camera;
                     camera.target *= SCALE_FACTOR;
                     camera.position *= SCALE_FACTOR;
                     camera
+                }, |mut d| {
+                    for edge in data.graph.edges() {
+                        let [i, j] = edge.adj;
+                        let p0 = data.graph.vert(i).pos;
+                        let p1 = data.graph.vert(j).pos;
+                        d.draw_capsule(p0*SCALE_FACTOR, p1*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, data.edges_color);
+                    }
+
+                    for (v, vert) in data.graph.verts_iter() {
+                        let distance_from_target = vert.pos - data.orbit.target;
+                        let mut color = route.as_ref().and_then(|route| route.classify(&data.graph, v)).map_or(
+                            data.verts_color,
+                            |c| match c {
+                                VertexClass::Current => Color::SKYBLUE,
+                                VertexClass::Adjacent => Color::ORANGE,
+                                VertexClass::Root => Color::BLUE,
+                                VertexClass::Result => Color::BLUEVIOLET,
+                                VertexClass::Target => Color::GREEN,
+                            }
+                        );
+
+                        if data.is_giving_interactive_targets {
+                            let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS).hit;
+                            if is_hovered {
+                                color = color.brightness(0.45);
+                            }
+                            let is_targeted = data.interactive_targets.contains(&v);
+                            if is_targeted {
+                                color = color.brightness(0.35);
+                            }
+                        } else {
+                            let is_focused = distance_from_target.dot(distance_from_target) <= VERTEX_RADIUS*VERTEX_RADIUS;
+                            if is_focused {
+                                color = color.brightness(0.45);
+                            }
+                        }
+
+                        // let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
+                        d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, 10, 10, color);
+                        if let Some(route) = &route && let Some(Visit { parent: Some(p), .. }) = route.get_visit(v) {
+                            d.draw_capsule(data.graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
+                        }
+                    }
+
+                    if let Some(route) = &route {
+                        for pair in route.result().windows(2) {
+                            let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
+                            d.draw_capsule(data.graph.vert(*a).pos*SCALE_FACTOR, data.graph.vert(*b).pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                        }
+                    }
+
+                    d.draw_capsule((data.orbit.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (data.orbit.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
+                    d.draw_capsule((data.orbit.target + Vector3::new( 0.0, -5.0, 0.0))*SCALE_FACTOR, (data.orbit.target + Vector3::new(0.0, 5.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
                 });
 
-                for edge in data.graph.edges() {
-                    let [i, j] = edge.adj;
-                    let p0 = data.graph.vert(i).pos;
-                    let p1 = data.graph.vert(j).pos;
-                    d.draw_capsule(p0*SCALE_FACTOR, p1*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, data.edges_color);
-                }
+                d.draw_rectangle_rec(Rectangle::new((mouse_snapped.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_screen_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
+                d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_snapped.y - 1.5)*UPSCALE, d.get_screen_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
 
                 for (v, vert) in data.graph.verts_iter() {
-                    let distance_from_target = vert.pos - data.orbit.target;
-                    let mut color = route.as_ref().and_then(|route| route.classify(&data.graph, v)).map_or(
-                        data.verts_color,
-                        |c| match c {
-                            VertexClass::Current => Color::SKYBLUE,
-                            VertexClass::Adjacent => Color::ORANGE,
-                            VertexClass::Root => Color::BLUE,
-                            VertexClass::Result => Color::BLUEVIOLET,
-                            VertexClass::Target => Color::GREEN,
-                        }
+                    let pos = d.get_world_to_screen(vert.pos, camera);
+                    let text = vert.alias.as_str();
+                    let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
+                    d.draw_text_ex(&font, text, (pos - Vector2::new(text_size.x*0.5, font.baseSize as f32*0.5))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
+                    if let Some(route) = &route && let Some(Visit { distance, parent }) = route.get_visit(v) {
+                        let parent_text = parent.map_or("-", |p| &data.graph.vert(p).alias);
+                        let text = format!("{} ({parent_text})", distance.ceil());
+                        d.draw_text_ex(&font, &text, (pos + Vector2::new(text_size.x*0.5 + 3.0, 3.0))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
+                    }
+                }
+            });
+        }
+
+        rl.draw(&thread, |mut d| {
+            d.clear_background(data.background_color);
+
+            // Render
+            {
+                d.draw_shader_mode(&mut shader, |mut d| {
+                    let src = Rectangle::new(0.0, 0.0, framebuffer.width() as f32, -framebuffer.height() as f32);
+                    let dst = Rectangle::new(0.0, 0.0, d.get_screen_width() as f32, d.get_screen_height() as f32);
+                    d.draw_texture_pro(&framebuffer, src, dst, Vector2::ZERO, 0.0, Color::WHITE);
+                });
+            }
+
+            // Console
+            {
+                if !cin.is_focused() {
+                    d.draw_text_ex(
+                        &font,
+                        "use W/A/S/D to pan, Q/E to zoom, and R/F/Z/X to orbit",
+                        Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize*3) as f32 - SAFE_ZONE),
+                        font.baseSize as f32,
+                        0.0,
+                        Color::GREENYELLOW,
                     );
-
-                    if data.is_giving_interactive_targets {
-                        let is_hovered = get_ray_collision_sphere(d.get_screen_to_world_ray(d.get_mouse_position(), camera), vert.pos, VERTEX_RADIUS).hit;
-                        if is_hovered {
-                            color = color.brightness(0.45);
-                        }
-                        let is_targeted = data.interactive_targets.contains(&v);
-                        if is_targeted {
-                            color = color.brightness(0.35);
-                        }
-                    } else {
-                        let is_focused = distance_from_target.dot(distance_from_target) <= VERTEX_RADIUS*VERTEX_RADIUS;
-                        if is_focused {
-                            color = color.brightness(0.45);
-                        }
-                    }
-
-                    // let resolution = lerp(24.0, 8.0, (camera.position.distance_to(vert.pos)/1000.0).clamp(0.0, 1.0)).round() as i32; // LOD
-                    d.draw_sphere_ex(vert.pos*SCALE_FACTOR, VERTEX_RADIUS*SCALE_FACTOR, 10, 10, color);
-                    if let Some(route) = &route && let Some(Visit { parent: Some(p), .. }) = route.get_visit(v) {
-                        d.draw_capsule(data.graph.vert(p).pos*SCALE_FACTOR, vert.pos*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::ORANGERED);
-                    }
                 }
 
-                if let Some(route) = &route {
-                    for pair in route.result().windows(2) {
-                        let [a, b] = pair else { panic!("window(2) should always create 2 elements") };
-                        d.draw_capsule(data.graph.vert(*a).pos*SCALE_FACTOR, data.graph.vert(*b).pos*SCALE_FACTOR, 2.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
-                    }
-                }
-
-                d.draw_capsule((data.orbit.target + Vector3::new(-5.0, 0.0,  0.0))*SCALE_FACTOR, (data.orbit.target + Vector3::new(5.0, 0.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
-                d.draw_capsule((data.orbit.target + Vector3::new( 0.0, -5.0, 0.0))*SCALE_FACTOR, (data.orbit.target + Vector3::new(0.0, 5.0, 0.0))*SCALE_FACTOR, 1.0*SCALE_FACTOR, 16, 0, Color::BLUEVIOLET);
-            }
-
-            d.draw_rectangle_rec(Rectangle::new((mouse_snapped.x - 1.5)*UPSCALE, 0.0, 3.0*UPSCALE, d.get_screen_height() as f32*UPSCALE), Color::new(255, 255, 255, 32));
-            d.draw_rectangle_rec(Rectangle::new(0.0, (mouse_snapped.y - 1.5)*UPSCALE, d.get_screen_width() as f32*UPSCALE, 3.0*UPSCALE), Color::new(255, 255, 255, 32));
-
-            for (v, vert) in data.graph.verts_iter() {
-                let pos = d.get_world_to_screen(vert.pos, camera);
-                let text = vert.alias.as_str();
-                let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
-                d.draw_text_ex(&font, text, (pos - Vector2::new(text_size.x*0.5, font.baseSize as f32*0.5))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::WHITE);
-                if let Some(route) = &route && let Some(Visit { distance, parent }) = route.get_visit(v) {
-                    let parent_text = parent.map_or("-", |p| &data.graph.vert(p).alias);
-                    let text = format!("{} ({parent_text})", distance.ceil());
-                    d.draw_text_ex(&font, &text, (pos + Vector2::new(text_size.x*0.5 + 3.0, 3.0))*UPSCALE, font.baseSize as f32*UPSCALE, 0.0, Color::GRAY);
-                }
-            }
-        }
-
-        let mut d = rl.begin_drawing(&thread);
-        d.clear_background(data.background_color);
-
-        // Render
-        {
-            let mut d = d.begin_shader_mode(&mut shader);
-            let src = Rectangle::new(0.0, 0.0, framebuffer.width() as f32, -framebuffer.height() as f32);
-            let dst = Rectangle::new(0.0, 0.0, d.get_screen_width() as f32, d.get_screen_height() as f32);
-            d.draw_texture_pro(&framebuffer, src, dst, Vector2::ZERO, 0.0, Color::WHITE);
-        }
-
-        // Console
-        {
-            if !cin.is_focused() {
                 d.draw_text_ex(
                     &font,
-                    "use W/A/S/D to pan, Q/E to zoom, and R/F/Z/X to orbit",
-                    Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize*3) as f32 - SAFE_ZONE),
+                    if cin.is_focused() {
+                        "press ENTER to run the command, or ESCAPE to cancel"
+                    } else {
+                        "press ENTER to begin typing a command"
+                    },
+                    Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize*2) as f32 - SAFE_ZONE),
                     font.baseSize as f32,
                     0.0,
                     Color::GREENYELLOW,
                 );
-            }
 
-            d.draw_text_ex(
-                &font,
-                if cin.is_focused() {
-                    "press ENTER to run the command, or ESCAPE to cancel"
-                } else {
-                    "press ENTER to begin typing a command"
-                },
-                Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize*2) as f32 - SAFE_ZONE),
-                font.baseSize as f32,
-                0.0,
-                Color::GREENYELLOW,
-            );
-
-            d.draw_text_ex(
-                &font,
-                &format!("x:{}/y:{}", data.orbit.target.x, data.orbit.target.z),
-                Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize) as f32 - SAFE_ZONE),
-                font.baseSize as f32,
-                0.0,
-                Color::GREENYELLOW,
-            );
-
-            {
-                let font_size = font.baseSize as f32;
-                let spacing = 0.0;
-                let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
-                let max_history_lines = ((d.get_screen_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
-
-                let (c_out, c_in) = (&mut cout, &mut cin);
-
-                let display_cursor = c_in.is_focused() && is_cursor_shown;
-                let (selection_range, selection_tail) = (c_in.selection_range(), c_in.selection_tail());
-
-                if c_out.is_dirty() || c_in.is_dirty() {
-                    let (Color { r, g, b, a }, pre) = ConsoleLineCategory::Command.color_prefix();
-                    let cmd_string = format!("<color=rgba({r},{g},{b},{a})>{pre}{}</color>", c_in.current());
-
-                    let history = c_out.log_history()
-                        .flat_map(|msg| msg
-                            .lines()
-                            .enumerate()
-                        )
-                        .chain(data.is_debugging
-                            .then(|| c_out.dbg_history()
-                                .flat_map(|msg| msg
-                                    .lines()
-                                    .enumerate()
-                                )
-                            )
-                            .into_iter()
-                            .flatten()
-                        );
-
-                    let mut skip = history
-                        .clone()
-                        .count()
-                        .saturating_sub(max_history_lines);
-
-                    skip -= history.clone()
-                        .map(|(n, _)| n)
-                        .nth(skip)
-                        .unwrap_or_default();
-
-                    let history = history
-                        .map(|(_, s)| s)
-                        .skip(skip);
-
-                    let it = history.chain(std::iter::once(cmd_string.as_str()));
-
-                    console_buf.clear();
-                    console_buf.reserve(it.clone().map(|s| s.len() + 1).sum::<usize>());
-                    for s in it {
-                        console_buf.push_str(s);
-                        console_buf.push('\n');
-                    }
-
-                    c_in.mark_clean();
-                    c_out.mark_clean();
-                }
-
-                let (init, sample) = console_buf.split_at(
-                    console_buf.match_indices('\n')
-                        .map(|(n, _)| n)
-                        .nth_back(max_history_lines)
-                        .unwrap_or_default()
+                d.draw_text_ex(
+                    &font,
+                    &format!("x:{}/y:{}", data.orbit.target.x, data.orbit.target.z),
+                    Vector2::new(SAFE_ZONE, (d.get_screen_height() - font.baseSize) as f32 - SAFE_ZONE),
+                    font.baseSize as f32,
+                    0.0,
+                    Color::GREENYELLOW,
                 );
 
-                let mut point = Vector2::new(SAFE_ZONE, SAFE_ZONE);
-                let char_step = Vector2::new(char_width + spacing, font_size);
-                d.set_text_line_spacing(0);
-                for (text, color) in sample.enrich(Color::WHITE, init) {
-                    // let wrap_width = 128;
-                    let mut lines_it = text.split('\n');
-                    if let Some(line) = lines_it.next() {
-                        let mut last_line = line;
-                        d.draw_text_ex(&font, line, point, font_size, spacing, color);
-                        for line in lines_it {
-                            point.x = SAFE_ZONE;
-                            point.y += font_size;
-                            d.draw_text_ex(&font, line, point, font_size, spacing, color);
-                            last_line = line;
+                {
+                    let font_size = font.baseSize as f32;
+                    let spacing = 0.0;
+                    let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
+                    let max_history_lines = ((d.get_screen_height() as f32 - SAFE_ZONE*2.0)/font.baseSize as f32 - 5.0).floor().max(0.0) as usize;
+
+                    let (c_out, c_in) = (&mut cout, &mut cin);
+
+                    let display_cursor = c_in.is_focused() && is_cursor_shown;
+                    let (selection_range, selection_tail) = (c_in.selection_range(), c_in.selection_tail());
+
+                    if c_out.is_dirty() || c_in.is_dirty() {
+                        let (Color { r, g, b, a }, pre) = ConsoleLineCategory::Command.color_prefix();
+                        let cmd_string = format!("<color=rgba({r},{g},{b},{a})>{pre}{}</color>", c_in.current());
+
+                        let history = c_out.log_history()
+                            .flat_map(|msg| msg
+                                .lines()
+                                .enumerate()
+                            )
+                            .chain(data.is_debugging
+                                .then(|| c_out.dbg_history()
+                                    .flat_map(|msg| msg
+                                        .lines()
+                                        .enumerate()
+                                    )
+                                )
+                                .into_iter()
+                                .flatten()
+                            );
+
+                        let mut skip = history
+                            .clone()
+                            .count()
+                            .saturating_sub(max_history_lines);
+
+                        skip -= history.clone()
+                            .map(|(n, _)| n)
+                            .nth(skip)
+                            .unwrap_or_default();
+
+                        let history = history
+                            .map(|(_, s)| s)
+                            .skip(skip);
+
+                        let it = history.chain(std::iter::once(cmd_string.as_str()));
+
+                        console_buf.clear();
+                        console_buf.reserve(it.clone().map(|s| s.len() + 1).sum::<usize>());
+                        for s in it {
+                            console_buf.push_str(s);
+                            console_buf.push('\n');
                         }
 
-                        let cols = last_line
-                            .enrich(Color::WHITE, "")
-                            .flat_map(|(s, _)| s.chars())
-                            .count();
-
-                        point.x += cols as f32*char_step.x;
+                        c_in.mark_clean();
+                        c_out.mark_clean();
                     }
-                }
 
-                {
-                    // const COLOR: Color = ConsoleLineCategory::Command.color_prefix().0;
-                    const PREFIX_LEN: usize = ConsoleLineCategory::Command.color_prefix().1.len();
-                    let row = sample.lines().count().saturating_sub(1);
-                    let selection_y = SAFE_ZONE + row as f32*font_size;
-                    let selection_rec = Rectangle::new(
-                        SAFE_ZONE + (PREFIX_LEN + selection_range.start) as f32*char_step.x,
-                        selection_y,
-                        (selection_range.len() as f32*char_step.x - spacing).max(0.0),
-                        font_size,
+                    let (init, sample) = console_buf.split_at(
+                        console_buf.match_indices('\n')
+                            .map(|(n, _)| n)
+                            .nth_back(max_history_lines)
+                            .unwrap_or_default()
                     );
-                    if !selection_range.is_empty() {
-                        d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.25));
-                    } else if !cin.current().is_empty() && selection_tail == cin.current().len() {
-                        // let it = Cmd::predict_cmd(cin.current());
-                        // if !it.clone().any(|(_, x)| x.is_empty()) {
-                        //     for (n, (_, s)) in it.enumerate() {
-                        //         d.draw_text_ex(&font, s, Vector2::new(selection_rec.x, selection_rec.y + font_size*n as f32), font_size, spacing, COLOR.alpha(0.5));
-                        //     }
-                        // }
+
+                    let mut point = Vector2::new(SAFE_ZONE, SAFE_ZONE);
+                    let char_step = Vector2::new(char_width + spacing, font_size);
+                    d.set_text_line_spacing(0);
+                    for (text, color) in sample.enrich(Color::WHITE, init) {
+                        // let wrap_width = 128;
+                        let mut lines_it = text.split('\n');
+                        if let Some(line) = lines_it.next() {
+                            let mut last_line = line;
+                            d.draw_text_ex(&font, line, point, font_size, spacing, color);
+                            for line in lines_it {
+                                point.x = SAFE_ZONE;
+                                point.y += font_size;
+                                d.draw_text_ex(&font, line, point, font_size, spacing, color);
+                                last_line = line;
+                            }
+
+                            let cols = last_line
+                                .enrich(Color::WHITE, "")
+                                .flat_map(|(s, _)| s.chars())
+                                .count();
+
+                            point.x += cols as f32*char_step.x;
+                        }
                     }
-                    if display_cursor {
-                        let cursor_rec = Rectangle::new(
-                            (SAFE_ZONE + (PREFIX_LEN + selection_tail) as f32*char_step.x).floor(),
-                            selection_y + font_size - 2.0,
-                            char_width + 2.0*spacing,
-                            2.0,
+
+                    {
+                        // const COLOR: Color = ConsoleLineCategory::Command.color_prefix().0;
+                        const PREFIX_LEN: usize = ConsoleLineCategory::Command.color_prefix().1.len();
+                        let row = sample.lines().count().saturating_sub(1);
+                        let selection_y = SAFE_ZONE + row as f32*font_size;
+                        let selection_rec = Rectangle::new(
+                            SAFE_ZONE + (PREFIX_LEN + selection_range.start) as f32*char_step.x,
+                            selection_y,
+                            (selection_range.len() as f32*char_step.x - spacing).max(0.0),
+                            font_size,
                         );
-                        d.draw_rectangle_rec(cursor_rec, Color::LIGHTBLUE);
+                        if !selection_range.is_empty() {
+                            d.draw_rectangle_rec(selection_rec, Color::LIGHTBLUE.alpha(0.25));
+                        } else if !cin.current().is_empty() && selection_tail == cin.current().len() {
+                            // let it = Cmd::predict_cmd(cin.current());
+                            // if !it.clone().any(|(_, x)| x.is_empty()) {
+                            //     for (n, (_, s)) in it.enumerate() {
+                            //         d.draw_text_ex(&font, s, Vector2::new(selection_rec.x, selection_rec.y + font_size*n as f32), font_size, spacing, COLOR.alpha(0.5));
+                            //     }
+                            // }
+                        }
+                        if display_cursor {
+                            let cursor_rec = Rectangle::new(
+                                (SAFE_ZONE + (PREFIX_LEN + selection_tail) as f32*char_step.x).floor(),
+                                selection_y + font_size - 2.0,
+                                char_width + 2.0*spacing,
+                                2.0,
+                            );
+                            d.draw_rectangle_rec(cursor_rec, Color::LIGHTBLUE);
+                        }
+                    }
+
+                    #[cfg(debug_assertions)] {
+                        d.draw_fps(0, 0);
                     }
                 }
-
-                d.draw_fps(0, 0);
             }
-        }
+        });
     }
 }
