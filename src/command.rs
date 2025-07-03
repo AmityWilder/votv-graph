@@ -1,4 +1,5 @@
 use std::{ops::ControlFlow, str::FromStr, task::Poll};
+use cmd_macros::Command;
 use raylib::prelude::*;
 // use snippet::Snippet;
 use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{Coords, ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
@@ -20,6 +21,25 @@ pub struct ProgramData {
     pub verts_color: Color,
     pub edges_color: Color,
     pub background_color: Color,
+}
+
+#[derive(Command)]
+enum Foo {
+    #[help = "A is for Apple"]
+    #[template = "apple"]
+    A,
+
+    #[help = "B is for Banana"]
+    #[template = "banana"]
+    B,
+}
+
+#[test]
+fn test() {
+    assert_eq!(Foo::A.help(), "A is for Apple");
+    assert_eq!(Foo::A.template(), "apple");
+    assert_eq!(Foo::B.help(), "B is for Banana");
+    assert_eq!(Foo::B.template(), "banana");
 }
 
 pub struct CmdReturn {
