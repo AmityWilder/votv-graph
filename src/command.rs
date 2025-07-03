@@ -253,6 +253,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "cls"]
     #[help = "Clear the console."]
     Cls {
@@ -268,6 +269,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "echo"]
     #[help = "Repeat the arguments."]
     Echo {
@@ -278,6 +280,7 @@ define_commands!{
             Ok(CmdPromise::Ready(CmdReturn::new(args.iter().map(<&str>::to_string).collect(), CmdRetDisplay::Echo)))
         },
     },
+
     #[input = "dbg"]
     #[help = "Toggle debug messages."]
     Dbg {
@@ -307,6 +310,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "focus"]
     #[help = "Focus a vertex."]
     Focus {
@@ -360,6 +364,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "color.verts"]
     #[help = "Set the color of all vertices."]
     ColorVerts {
@@ -382,6 +387,7 @@ define_commands!{
         #[rets()]
         Specific = |_cout, _cin, _data, _args| todo!("run_color_verts_specific requires per-vertex colors"),
     },
+
     #[input = "color.edges"]
     #[help = "Set the color of all edges."]
     ColorEdges {
@@ -399,6 +405,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "color.bg"]
     #[help = "Set the color of the background."]
     ColorBackground {
@@ -482,6 +489,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "sv.route.add"]
     #[help = "Add targets to the current route."]
     SvRouteAdd {
@@ -520,6 +528,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "sv.route.list"]
     #[help = "List the results of the current route."]
     SvRouteList {
@@ -544,6 +553,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "sv.route.clear"]
     #[help = "Clear the current route."]
     SvRouteClear {
@@ -559,6 +569,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "sv.new"]
     #[help = "Create a new vertex."]
     SvNew {
@@ -597,6 +608,7 @@ define_commands!{
             Ok(CmdPromise::Ready(CmdReturn::disp(CmdRetDisplay::SvNew)))
         },
     },
+
     #[input = "sv.edge"]
     #[help = "Create a new edge."]
     SvEdge {
@@ -647,6 +659,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "sv.load"]
     #[help = "Load a graph from a file."]
     SvLoad {
@@ -665,6 +678,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "sv.save"]
     #[help = "Save the graph to a file."]
     SvSave {
@@ -682,6 +696,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "tempo"]
     #[help = "Set the tempo of the route generator."]
     Tempo {
@@ -720,6 +735,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "skip"]
     #[help = "Repeat all but the first n arguments."]
     Skip {
@@ -735,6 +751,7 @@ define_commands!{
             }
         },
     },
+
     #[input = "take"]
     #[help = "Only repeat the first n arguments."]
     Take {

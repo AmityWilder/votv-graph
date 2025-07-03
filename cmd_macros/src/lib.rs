@@ -74,9 +74,7 @@ fn impl_derive(input: DeriveInput) -> Result<TokenStream> {
                     let Attrs { help, template } = get_attrs(node)?;
                     Ok((&node.ident, (help, template)))
                 })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .unzip::<_, _, Vec<_>, (Vec<_>, Vec<_>)>();
+                .collect::<Result<(Vec<_>, (Vec<_>, Vec<_>))>>()?;
 
             Ok(quote! {
                 impl #ident {
