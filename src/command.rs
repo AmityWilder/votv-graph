@@ -1,5 +1,5 @@
 use std::{ops::ControlFlow, str::FromStr, task::Poll};
-use cmd_macros::Command;
+use cmd_macros::{Command, CommandEnum};
 use raylib::prelude::*;
 // use snippet::Snippet;
 use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{Coords, ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
@@ -23,8 +23,19 @@ pub struct ProgramData {
     pub background_color: Color,
 }
 
-#[derive(Command)]
+#[derive(CommandEnum)]
 enum Foo {
+    #[help = "Squeak"]
+    #[input = "bar"]
+    Bar(Bar),
+
+    #[help = "blah blah"]
+    #[input = "baz"]
+    Baz(Baz),
+}
+
+#[derive(Command)]
+enum Bar {
     #[help = "A is for Apple"]
     #[template = "apple"]
     A,
@@ -32,14 +43,25 @@ enum Foo {
     #[help = "B is for Banana"]
     #[template = "banana"]
     B,
+
+    #[help = "B is for Banana"]
+    #[template = "banana"]
+    C,
+}
+
+#[derive(Command)]
+enum Baz {
+    #[help = "A is for Apple"]
+    #[template = "apple"]
+    Basic,
 }
 
 #[test]
 fn test() {
-    assert_eq!(Foo::A.help(), "A is for Apple");
-    assert_eq!(Foo::A.template(), "apple");
-    assert_eq!(Foo::B.help(), "B is for Banana");
-    assert_eq!(Foo::B.template(), "banana");
+    assert_eq!(Foo::Bar.help(), "Squeak");
+    assert_eq!(Foo::Bar.input(), "bar");
+    assert_eq!(Foo::Baz.help(), "blah blah");
+    assert_eq!(Foo::Baz.input(), "baz");
 }
 
 pub struct CmdReturn {
