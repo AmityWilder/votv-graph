@@ -1,161 +1,179 @@
+#![allow(unused)]
+
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{parse::{End, ParseStream}, parse_macro_input, token::{Enum, Struct, Union}, Attribute, Data, DataStruct, DataUnion, DeriveInput, Error, Expr, ExprLit, Lit, LitStr, Result, Variant};
+use quote::quote;
+use syn::{braced, bracketed, parenthesized, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, spanned::Spanned, token, Attribute, Error, Expr, ExprBlock, Field, Ident, Item, Lit, LitStr, MetaNameValue, Result, Token};
 
-#[proc_macro_derive(CommandEnum, attributes(help, input))]
-pub fn derive_command_enum(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    impl_command_enum(input)
-        .map_or_else(|e| e.into_compile_error().into(), |x| x.into())
-}
+#[proc_macro]
+pub fn cmd(input: TokenStream) -> TokenStream {
+    let cmd_data = parse_macro_input!(input as CmdEnumData);
+    let ident = &cmd_data.ident;
 
-#[proc_macro_derive(Command, attributes(help, template))]
-pub fn derive_command(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    impl_command(input)
-        .map_or_else(|e| e.into_compile_error().into(), |x| x.into())
-}
+    let inputs = cmd_data.commands.iter()
+        .map(|cmd|
+            cmd.name.iter()
+                .map(|ident| ident.to_string())
+                .collect::<Vec<_>>()
+                .join(".")
+        )
+        .collect::<Vec<_>>();
 
-fn impl_command_enum(input: DeriveInput) -> Result<TokenStream> {
-    let ident = input.ident;
-    match input.data {
-        Data::Enum(data) => {
-            let (variant_idents, (variant_help, variant_templates)) = data
-                .variants
-                .iter()
-                .map(|node| {
-                    let mut help = None;
-                    let mut input = None;
-
-                    for attr in &node.attrs {
-                        if attr.path().is_ident("help") {
-                            if help.is_some() {
-                                return Err(Error::new_spanned(attr, "duplicate #[help] attribute"));
-                            }
-                            let value = &attr.meta.require_name_value()?.value;
-                            match value {
-                                Expr::Lit(ExprLit { lit: Lit::Str(string), .. }) => {
-                                    help = Some(string);
-                                }
-                                _ => return Err(Error::new_spanned(value, "help value must be a string literal")),
-                            }
-                        } else if attr.path().is_ident("input") {
-                            if input.is_some() {
-                                return Err(Error::new_spanned(attr, "duplicate #[input] attribute"));
-                            }
-                            let value = &attr.meta.require_name_value()?.value;
-                            match value {
-                                Expr::Lit(ExprLit { lit: Lit::Str(string), .. }) => {
-                                    input = Some(string);
-                                }
-                                _ => return Err(Error::new_spanned(value, "input value must be a string literal")),
-                            }
+    let variants = cmd_data.commands.iter()
+        .map(|cmd|
+            Ident::new(
+                &cmd.name.iter()
+                    .map(|ident| {
+                        let mut s = ident.to_string();
+                        if let Some(ch) = s.chars().next() {
+                            s.replace_range(
+                                0..ch.len_utf8(),
+                                &ch.to_uppercase().collect::<String>(),
+                            );
                         }
-                    }
+                        s
+                    })
+                    .collect::<Vec<_>>()
+                    .concat(),
+                cmd.name.span(),
+            )
+        )
+        .collect::<Vec<_>>();
 
-                    Ok((
-                        &node.ident,
-                        (
-                            help.ok_or_else(|| Error::new_spanned(node, "missing help attribute"))?,
-                            input.ok_or_else(|| Error::new_spanned(node, "missing input attribute"))?,
-                        )
-                    ))
-                })
-                .collect::<Result<(Vec<_>, (Vec<_>, Vec<_>))>>()?;
-
-            Ok(quote! {
-                impl #ident {
-                    pub const fn help(&self) -> &'static str {
-                        match self {
-                            #(Self::#variant_idents {..} => #variant_help,)*
-                        }
-                    }
-
-                    pub const fn template(&self) -> &'static str {
-                        match self {
-                            #(Self::#variant_idents {..} => #variant_templates,)*
-                        }
-                    }
-                }
-            }.into())
+    quote! {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        enum #ident {
+            #(#variants),*
         }
+        impl #ident {
+            pub const fn input(&self) -> &'static str {
+                match self {
+                    #(Self::#variants => #inputs),*
+                }
+            }
+        }
+        impl FromStr for #ident {
+            type Err = CmdError;
 
-        | Data::Struct(DataStruct { struct_token, .. })
-            => Err(Error::new_spanned(struct_token, "struct as command enums are not supported")),
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    #(#inputs => Ok(Self::#variants),)*
+                    _ => Err(CmdError::NoSuchCmd(s.to_string())),
+                }
+            }
+        }
+        impl std::fmt::Display for #ident {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.input().fmt(f)
+            }
+        }
+    }.into()
+}
 
-        | Data::Union(DataUnion { union_token, .. })
-            => Err(Error::new_spanned(union_token, "union as command enums are not supported")),
+/// ```ignore
+/// cmd!{
+///     enum Foo {
+///         // commands
+///     }
+/// }
+/// ```
+#[derive(Debug)]
+struct CmdEnumData {
+    enum_token: Token![enum],
+    ident: Ident,
+    brace_token: token::Brace,
+    commands: Vec<CmdData>,
+}
+
+impl Parse for CmdEnumData {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let content;
+        Ok(Self {
+            enum_token: input.parse()?,
+            ident: input.parse()?,
+            brace_token: braced!(content in input),
+            commands: {
+                let mut commands = Vec::new();
+                while !content.is_empty() {
+                    commands.push(content.parse()?);
+                }
+                commands
+            },
+        })
     }
 }
 
-fn impl_command(input: DeriveInput) -> Result<TokenStream> {
-    let ident = input.ident;
-    match input.data {
-        Data::Enum(data) => {
-            let (variant_idents, (variant_help, variant_templates)) = data
-                .variants
-                .iter()
-                .map(|node| {
-                    let mut help = None;
-                    let mut template = None;
+type CmdName = Punctuated<Ident, Token![.]>;
 
-                    for attr in &node.attrs {
-                        if attr.path().is_ident("help") {
-                            if help.is_some() {
-                                return Err(Error::new_spanned(attr, "duplicate #[help] attribute"));
+/// ```ignore
+/// sv.mango {
+///     // overloads
+/// }
+/// ```
+#[derive(Debug)]
+struct CmdData {
+    help: Vec<LitStr>,
+    name: CmdName,
+    brace_token: token::Brace,
+    overloads: Vec<UsageData>,
+}
+
+impl Parse for CmdData {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let content;
+        Ok(Self {
+            help: {
+                let attrs = Attribute::parse_outer(input)?;
+                attrs.into_iter()
+                    .map(|attr| {
+                        let name_value = attr.meta.require_name_value()?;
+                        if name_value.path.is_ident("doc") {
+                            if let Expr::Lit(syn::ExprLit { lit: Lit::Str(doc), .. }) = &name_value.value {
+                                Ok(doc.clone())
+                            } else {
+                                Err(Error::new_spanned(&name_value.value, "doc comment must be string literal"))
                             }
-                            let value = &attr.meta.require_name_value()?.value;
-                            match value {
-                                Expr::Lit(ExprLit { lit: Lit::Str(string), .. }) => {
-                                    help = Some(string);
-                                }
-                                _ => return Err(Error::new_spanned(value, "help value must be a string literal")),
-                            }
-                        } else if attr.path().is_ident("template") {
-                            if template.is_some() {
-                                return Err(Error::new_spanned(attr, "duplicate #[template] attribute"));
-                            }
-                            let value = &attr.meta.require_name_value()?.value;
-                            match value {
-                                Expr::Lit(ExprLit { lit: Lit::Str(string), .. }) => {
-                                    template = Some(string);
-                                }
-                                _ => return Err(Error::new_spanned(value, "template value must be a string literal")),
-                            }
+                        } else {
+                            Err(Error::new_spanned(attr, "must be doc comment"))
                         }
-                    }
-
-                    Ok((
-                        &node.ident,
-                        (
-                            help.ok_or_else(|| Error::new_spanned(node, "missing help attribute"))?,
-                            template.ok_or_else(|| Error::new_spanned(node, "missing template attribute"))?,
-                        )
-                    ))
-                })
-                .collect::<Result<(Vec<_>, (Vec<_>, Vec<_>))>>()?;
-
-            Ok(quote! {
-                impl #ident {
-                    pub const fn help(&self) -> &'static str {
-                        match self {
-                            #(Self::#variant_idents {..} => #variant_help,)*
-                        }
-                    }
-
-                    pub const fn template(&self) -> &'static str {
-                        match self {
-                            #(Self::#variant_idents {..} => #variant_templates,)*
-                        }
-                    }
+                    })
+                    .collect::<Result<_>>()?
+            },
+            name: CmdName::parse_separated_nonempty(input)?,
+            brace_token: braced!(content in input),
+            overloads: {
+                let mut overloads = Vec::new();
+                while content.peek(token::Paren) {
+                    overloads.push(content.parse()?);
                 }
-            }.into())
-        }
+                overloads
+            },
+        })
+    }
+}
 
-        | Data::Struct(DataStruct { struct_token, .. })
-            => Err(Error::new_spanned(struct_token, "struct as commands are not supported")),
+/// ```ignore
+/// (/* comma-terminated fields */) => {
+///     // expr
+/// }
+/// ```
+#[derive(Debug)]
+struct UsageData {
+    par_token: token::Paren,
+    fields: Punctuated<Field, Token![,]>,
+    fat_arrow: Token![=>],
+    definition: ExprBlock,
+    semi: Token![;],
+}
 
-        | Data::Union(DataUnion { union_token, .. })
-            => Err(Error::new_spanned(union_token, "union as commands are not supported")),
+impl Parse for UsageData {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let par_content;
+        Ok(Self {
+            par_token: parenthesized!(par_content in input),
+            fields: par_content.parse_terminated(Field::parse_named, Token![,])?,
+            fat_arrow: input.parse()?,
+            definition: input.parse()?,
+            semi: input.parse()?,
+        })
     }
 }
