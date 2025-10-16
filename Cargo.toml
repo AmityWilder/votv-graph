@@ -1,11 +1,15 @@
-[workspace]
-members = ["cmd_macros"]
-
 [package]
 name = "votv-graph"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-raylib = { git = "https://github.com/raylib-rs/raylib-rs.git", branch = "unstable" }
-cmd_macros = { path = "cmd_macros" }
+anyhow = "1.0.100"
+clap = { version = "4.5.49", features = ["derive"] }
+clap_derive = "4.5.49"
+miette = "7.6.0"
+nom = "8.0.0"
+quote = "1.0.41"
+raylib = "5.5.1"
+serde = "1.0.228"
+thiserror = "2.0.17"

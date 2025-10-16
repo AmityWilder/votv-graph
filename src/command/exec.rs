@@ -1,6 +1,13 @@
-use std::{num::NonZeroU32, path::Path, str::FromStr};
+use crate::{
+    CAMERA_POSITION_DEFAULT, CommandData, VERTEX_RADIUS,
+    console::{input::ConsoleIn, output::ConsoleOut, parse_color::RichColor},
+    console_log,
+    graph::{Adjacent, VertexID, WeightedGraph},
+    route::RouteGenerator,
+    serialization::LoadGraphError,
+};
 use raylib::prelude::*;
-use crate::{console::{input::ConsoleIn, output::ConsoleOut, parse_color::RichColor}, console_log, graph::{Adjacent, VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, CommandData, CAMERA_POSITION_DEFAULT, VERTEX_RADIUS};
+use std::{num::NonZeroU32, path::Path, str::FromStr};
 
 use super::{Cmd, FromCmdError, Tempo};
 
@@ -28,8 +35,20 @@ impl std::error::Error for ParseCoordsError {
 
 pub fn parse_coords(coords: &str) -> Result<Vector3, ParseCoordsError> {
     let (x, y) = coords.split_once('/').ok_or(ParseCoordsError::Syntax)?;
-    let x = if x.starts_with("x:") { x[2..].parse().map_err(|e| ParseCoordsError::ParseFloat(e))? } else { return Err(ParseCoordsError::Syntax) };
-    let y = if y.starts_with("y:") { y[2..].parse().map_err(|e| ParseCoordsError::ParseFloat(e))? } else { return Err(ParseCoordsError::Syntax) };
+    let x = if x.starts_with("x:") {
+        x[2..]
+            .parse()
+            .map_err(|e| ParseCoordsError::ParseFloat(e))?
+    } else {
+        return Err(ParseCoordsError::Syntax);
+    };
+    let y = if y.starts_with("y:") {
+        y[2..]
+            .parse()
+            .map_err(|e| ParseCoordsError::ParseFloat(e))?
+    } else {
+        return Err(ParseCoordsError::Syntax);
+    };
     Ok(Vector3::new(x, 0.0, y))
 }
 
@@ -52,7 +71,12 @@ impl std::fmt::Display for CmdError {
             Self::CheckUsage(cmd) => {
                 let usage = cmd.usage();
                 let has_multiple = usage.len() > 1;
-                write!(f, "usage:{}{}", if has_multiple { "\n    " } else { " " }, usage.join("\n    "))
+                write!(
+                    f,
+                    "usage:{}{}",
+                    if has_multiple { "\n    " } else { " " },
+                    usage.join("\n    ")
+                )
             }
             Self::VertexDNE(id) => write!(f, "vertex \"{id}\" does not exist"),
             Self::MissingArgs(args) => write!(f, "missing input for {args}"),
@@ -69,18 +93,15 @@ impl std::fmt::Display for CmdError {
 impl std::error::Error for CmdError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            | Self::CheckUsage(_)
+            Self::CheckUsage(_)
             | Self::VertexDNE(_)
             | Self::MissingArgs(_)
-            | Self::NoExistingRoute
-                => None,
+            | Self::NoExistingRoute => None,
 
             Self::ParseCoordsFailed(e) => Some(e),
             Self::LoadGraphFailed(e) => Some(e),
 
-            | Self::ParseTempoTicksFailed(e)
-            | Self::ParseTempoMillisecondsFailed(e)
-                => Some(e),
+            Self::ParseTempoTicksFailed(e) | Self::ParseTempoMillisecondsFailed(e) => Some(e),
 
             Self::FromCmdError(e) => Some(e),
             Self::IOError(e) => Some(e),
@@ -99,10 +120,7 @@ impl Cmd {
     fn parse(s: &str) -> Option<Result<(Cmd, std::str::SplitWhitespace<'_>), FromCmdError>> {
         let mut args = s.split_whitespace();
         args.next()
-            .map(|first|
-                Cmd::try_from_str(first)
-                    .map(|cmd| (cmd, args))
-            )
+            .map(|first| Cmd::try_from_str(first).map(|cmd| (cmd, args)))
     }
 
     pub fn predict(s: &str) -> ! {
@@ -141,8 +159,10 @@ impl Cmd {
                 camera.target = Vector3::zero();
                 Ok(String::new())
             } else {
-                let vert = graph.verts().iter()
-                    .find(|vert| (vert.id.eq_ignore_ascii_case(target) || vert.alias.eq_ignore_ascii_case(target)));
+                let vert = graph.verts().iter().find(|vert| {
+                    (vert.id.eq_ignore_ascii_case(target)
+                        || vert.alias.eq_ignore_ascii_case(target))
+                });
 
                 if let Some(vert) = vert {
                     camera.target = vert.pos;
@@ -153,7 +173,9 @@ impl Cmd {
                 }
             }
         } else {
-            let vert = graph.verts().iter()
+            let vert = graph
+                .verts()
+                .iter()
                 .find(|vert| check_collision_spheres(vert.pos, VERTEX_RADIUS, camera.target, 1.0));
 
             let id = if let Some(target) = vert {
@@ -168,21 +190,35 @@ impl Cmd {
     }
 
     pub fn run_help(cout: &mut ConsoleOut) {
-        let usages = Cmd::LIST.into_iter().copied()
-            .flat_map(|item|
-                item.args().into_iter().copied()
+        let usages = Cmd::LIST
+            .into_iter()
+            .copied()
+            .flat_map(|item| {
+                item.args()
+                    .into_iter()
+                    .copied()
                     .map(move |args| (item.input(), args))
-            )
-            .map(|(input, args)| format!("<color = #0096e6>{input}</color><color = #0096e6aa>{args}</color>"))
+            })
+            .map(|(input, args)| {
+                format!("<color = #0096e6>{input}</color><color = #0096e6aa>{args}</color>")
+            })
             .collect::<Vec<_>>();
 
-        let width = usages.iter()
+        let width = usages
+            .iter()
             .map(|item| item.len())
-            .max().expect("should have at least one item");
+            .max()
+            .expect("should have at least one item");
 
-        let lines = usages.iter().map(String::as_str)
-            .zip(Cmd::LIST.into_iter().copied()
-                .flat_map(|item| item.description().into_iter()).copied()
+        let lines = usages
+            .iter()
+            .map(String::as_str)
+            .zip(
+                Cmd::LIST
+                    .into_iter()
+                    .copied()
+                    .flat_map(|item| item.description().into_iter())
+                    .copied(),
             )
             .map(|(usage, desc)| format!("{usage:<0$}  {desc}", width))
             .collect::<Vec<_>>();
@@ -213,24 +249,36 @@ impl Cmd {
         let mut args = args.peekable();
         let targets = match args.peek() {
             Some(&("-i" | "interactive")) => {
-                console_log!(cout, Info, "click each target with the mouse; order doesn't matter except that the first will be the start");
+                console_log!(
+                    cout,
+                    Info,
+                    "click each target with the mouse; order doesn't matter except that the first will be the start"
+                );
                 console_log!(cout, Info, "click a target again to un-target it");
-                console_log!(cout, Info, "run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished");
+                console_log!(
+                    cout,
+                    Info,
+                    "run the command `<color = #0096e6>sv.route</color>` (without arguments) when finished"
+                );
                 cin.insert_over_selection("sv.route");
                 *is_giving_interactive_targets = true;
                 cin.unfocus();
                 return Ok(String::new());
             }
-            Some(_) => {
-                args
-                    .map(|id| graph.find_vert(id).map_err(|start| CmdError::VertexDNE(start.to_string())))
-                    .collect::<Result<Vec<VertexID>, CmdError>>()?
-            },
+            Some(_) => args
+                .map(|id| {
+                    graph
+                        .find_vert(id)
+                        .map_err(|start| CmdError::VertexDNE(start.to_string()))
+                })
+                .collect::<Result<Vec<VertexID>, CmdError>>()?,
             None => interactive_targets,
         };
 
         let mut target_iter = targets.into_iter().peekable();
-        let start = target_iter.next().ok_or(CmdError::CheckUsage(Cmd::SvRoute))?;
+        let start = target_iter
+            .next()
+            .ok_or(CmdError::CheckUsage(Cmd::SvRoute))?;
         if target_iter.peek().is_none() {
             return Err(CmdError::MissingArgs("targets"));
         }
@@ -252,18 +300,28 @@ impl Cmd {
         let mut args = args.peekable();
         let targets = match args.peek() {
             Some(&("-i" | "interactive")) => {
-                console_log!(cout, Info, "click each target with the mouse; order doesn't matter");
+                console_log!(
+                    cout,
+                    Info,
+                    "click each target with the mouse; order doesn't matter"
+                );
                 console_log!(cout, Info, "click a target again to un-target it");
-                console_log!(cout, Info, "run the command `<color = #0096e6>sv.route.add</color>` (without arguments) when finished");
+                console_log!(
+                    cout,
+                    Info,
+                    "run the command `<color = #0096e6>sv.route.add</color>` (without arguments) when finished"
+                );
                 cin.insert_over_selection("sv.route.add");
                 *is_giving_interactive_targets = true;
                 return Ok(String::new());
             }
-            Some(_) => {
-                args
-                    .map(|id| graph.find_vert(id).map_err(|start| CmdError::VertexDNE(start.to_string())))
-                    .collect::<Result<Vec<VertexID>, CmdError>>()?
-            },
+            Some(_) => args
+                .map(|id| {
+                    graph
+                        .find_vert(id)
+                        .map_err(|start| CmdError::VertexDNE(start.to_string()))
+                })
+                .collect::<Result<Vec<VertexID>, CmdError>>()?,
             None => interactive_targets,
         };
         if targets.is_empty() {
@@ -283,7 +341,10 @@ impl Cmd {
     ) -> CmdResult {
         let id = args.next().ok_or(CmdError::CheckUsage(Cmd::SvNew))?;
         let mut alias = args.next();
-        let coords = args.next().or_else(|| alias.take()).ok_or(CmdError::CheckUsage(Cmd::SvNew))?;
+        let coords = args
+            .next()
+            .or_else(|| alias.take())
+            .ok_or(CmdError::CheckUsage(Cmd::SvNew))?;
         let pos = if coords == "focus" {
             camera.target
         } else {
@@ -303,14 +364,26 @@ impl Cmd {
     ) -> CmdResult {
         let a = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
         let b = args.next().ok_or(CmdError::CheckUsage(Cmd::SvEdge))?;
-        let a = graph.find_vert(a).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
-        let b = graph.find_vert(b).map_err(|id| CmdError::VertexDNE(id.to_string()))?;
-        if graph.adjacent(a).iter().any(|Adjacent { vertex, .. }| vertex == &b) {
+        let a = graph
+            .find_vert(a)
+            .map_err(|id| CmdError::VertexDNE(id.to_string()))?;
+        let b = graph
+            .find_vert(b)
+            .map_err(|id| CmdError::VertexDNE(id.to_string()))?;
+        if graph
+            .adjacent(a)
+            .iter()
+            .any(|Adjacent { vertex, .. }| vertex == &b)
+        {
             console_log!(cout, Warning, "vertices {a} and {b} are already connected");
         } else {
             graph.add_edge(a, b);
             *route = None;
-            console_log!(cout, Info, "created an edge connecting vertices {a} and {b}");
+            console_log!(
+                cout,
+                Info,
+                "created an edge connecting vertices {a} and {b}"
+            );
         }
         Ok(String::new())
     }
@@ -328,8 +401,15 @@ impl Cmd {
             } else if arg == "sprint" {
                 *tempo = Tempo::Sprint;
             } else if let Some((ticks, ms)) = arg.split_once('/') {
-                let ticks = NonZeroU32::new(ticks.parse().map_err(|e| CmdError::ParseTempoTicksFailed(e))?);
-                let ms = NonZeroU32::new(ms.parse().map_err(|e| CmdError::ParseTempoMillisecondsFailed(e))?);
+                let ticks = NonZeroU32::new(
+                    ticks
+                        .parse()
+                        .map_err(|e| CmdError::ParseTempoTicksFailed(e))?,
+                );
+                let ms = NonZeroU32::new(
+                    ms.parse()
+                        .map_err(|e| CmdError::ParseTempoMillisecondsFailed(e))?,
+                );
                 *tempo = match (ticks, ms) {
                     (None, _) => Tempo::Paused,
                     (Some(_), None) => Tempo::Instant,
@@ -354,7 +434,8 @@ impl Cmd {
         if let Some(path_str) = args.next() {
             let path = Path::new(path_str);
             let mem = std::fs::read_to_string(path)?;
-            *graph = WeightedGraph::load_from_memory(mem).map_err(|e| CmdError::LoadGraphFailed(e))?;
+            *graph =
+                WeightedGraph::load_from_memory(mem).map_err(|e| CmdError::LoadGraphFailed(e))?;
             *route = None;
             console_log!(cout, Info, "graph loaded from \"{path_str}\"");
             Ok(String::new())
@@ -420,7 +501,8 @@ impl Cmd {
             Cmd::Await => unreachable!(),
             Cmd::SvRouteList => {
                 if let Some(route) = &mut data.route {
-                    let list = route.result()
+                    let list = route
+                        .result()
                         .into_iter()
                         .copied()
                         .map(|id| data.graph.vert(id).id.as_str())
@@ -435,8 +517,24 @@ impl Cmd {
             }
             Cmd::SvRoute | Cmd::SvRouteAdd => {
                 let result = match self {
-                    Cmd::SvRoute    => Cmd::run_sv_route    (cout, cin, &mut data.graph, &mut data.route, &mut data.is_giving_interactive_targets, std::mem::take(&mut data.interactive_targets), args),
-                    Cmd::SvRouteAdd => Cmd::run_sv_route_add(cout, cin, &mut data.graph, &mut data.route, &mut data.is_giving_interactive_targets, std::mem::take(&mut data.interactive_targets), args),
+                    Cmd::SvRoute => Cmd::run_sv_route(
+                        cout,
+                        cin,
+                        &mut data.graph,
+                        &mut data.route,
+                        &mut data.is_giving_interactive_targets,
+                        std::mem::take(&mut data.interactive_targets),
+                        args,
+                    ),
+                    Cmd::SvRouteAdd => Cmd::run_sv_route_add(
+                        cout,
+                        cin,
+                        &mut data.graph,
+                        &mut data.route,
+                        &mut data.is_giving_interactive_targets,
+                        std::mem::take(&mut data.interactive_targets),
+                        args,
+                    ),
                     _ => unreachable!(),
                 };
                 if result.is_ok() && data.is_giving_interactive_targets {
@@ -448,7 +546,8 @@ impl Cmd {
                         loop {
                             route.step(cout, &mut data.graph);
                             if route.is_finished() {
-                                let s = route.result()
+                                let s = route
+                                    .result()
                                     .into_iter()
                                     .copied()
                                     .map(|id| data.graph.vert(id).id.as_str())
@@ -467,15 +566,22 @@ impl Cmd {
                 data.route = None;
                 console_log!(cout, Info, "route cleared");
                 Ok(String::new())
-            },
-            Cmd::SvNew => Cmd::run_sv_new(cout, &mut data.graph, &mut data.route, data.camera, args),
+            }
+            Cmd::SvNew => {
+                Cmd::run_sv_new(cout, &mut data.graph, &mut data.route, data.camera, args)
+            }
             Cmd::SvEdge => Cmd::run_sv_edge(cout, &mut data.graph, &mut data.route, args),
             Cmd::SvLoad => Cmd::run_sv_load(cout, &mut data.graph, &mut data.route, args),
             Cmd::SvSave => Cmd::run_sv_save(cout, &mut data.graph, args),
             Cmd::Tempo => Cmd::run_tempo(cout, &mut data.tempo, args),
             Cmd::Dbg => {
                 data.is_debugging = !data.is_debugging;
-                console_log!(cout, Info, "debugging is now {}", if data.is_debugging { "on" } else { "off" });
+                console_log!(
+                    cout,
+                    Info,
+                    "debugging is now {}",
+                    if data.is_debugging { "on" } else { "off" }
+                );
                 Ok(String::new())
             }
             Cmd::Focus => Cmd::run_focus(cout, &mut data.graph, &mut data.camera, args),
@@ -488,18 +594,17 @@ impl Cmd {
                 Ok(String::new())
             }
             Cmd::ColorVerts | Cmd::ColorEdges | Cmd::ColorBackground => {
-                let color: Option<Color> = args.next()
+                let color: Option<Color> = args
+                    .next()
                     .and_then(|x| RichColor::from_str(x).ok())
-                    .and_then(|RichColor(color)|
-                        args.next()
-                            .map_or(
-                                Some(color),
-                                |opacity_str| opacity_str
-                                    .strip_suffix('%')
-                                    .and_then(|x| x.parse::<f32>().ok())
-                                    .map(|a| color.alpha(a*0.01))
-                            )
-                    );
+                    .and_then(|RichColor(color)| {
+                        args.next().map_or(Some(color), |opacity_str| {
+                            opacity_str
+                                .strip_suffix('%')
+                                .and_then(|x| x.parse::<f32>().ok())
+                                .map(|a| color.alpha(a * 0.01))
+                        })
+                    });
                 if let Some(color) = color {
                     *match self {
                         Cmd::ColorVerts => &mut data.verts_color,
@@ -524,7 +629,9 @@ impl Cmd {
                     match Cmd::parse(cmd_args) {
                         Some(Ok((cmd, args))) => {
                             let result = cmd.run_once(
-                                args.chain(prev_ret.as_str().split_whitespace()).filter(|arg| !arg.is_empty()).peekable(),
+                                args.chain(prev_ret.as_str().split_whitespace())
+                                    .filter(|arg| !arg.is_empty())
+                                    .peekable(),
                                 cout,
                                 cin,
                                 data,
@@ -542,7 +649,7 @@ impl Cmd {
                                     let mut msg = e.to_string();
                                     while let Some(src) = e.source() {
                                         indent += 1;
-                                        write!(msg, "\n{:1$}{src}", "", 2*indent).unwrap();
+                                        write!(msg, "\n{:1$}{src}", "", 2 * indent).unwrap();
                                         e = src;
                                     }
                                     console_log!(cout, Error, "{msg}");

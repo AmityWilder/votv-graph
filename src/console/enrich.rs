@@ -1,5 +1,5 @@
-use raylib::prelude::*;
 use crate::types::RichColor;
+use raylib::prelude::*;
 
 pub trait EnrichEx {
     fn enrich(&self, root_color: Color, initial: &str) -> Enrich<'_>;
@@ -17,36 +17,23 @@ enum StackMutation<T> {
 }
 
 fn parse_color_node(s: &str) -> Option<RichColor> {
-    s
-        .strip_suffix('>')
-            .expect("should be guarded by filter_map")
+    s.strip_suffix('>')
+        .expect("should be guarded by filter_map")
         .strip_prefix("<color")
-        .and_then(|s| s
-            .trim_start_matches(' ')
-            .strip_prefix('=')
-        )
-        .and_then(|s| s
-            .trim_matches(' ')
-            .parse()
-            .ok()
-        )
+        .and_then(|s| s.trim_start_matches(' ').strip_prefix('='))
+        .and_then(|s| s.trim_matches(' ').parse().ok())
 }
 
 fn color_region(s: &str) -> (&str, &str, Option<StackMutation<Color>>) {
-    s
-        .match_indices(['<'])
+    s.match_indices(['<'])
         .map(|(i, _)| s.split_at(i))
-        .filter_map(|(pre, post)| post
-            .find('>')
-            .map(|pos| (pre, post.split_at(pos + 1)))
-        )
+        .filter_map(|(pre, post)| post.find('>').map(|pos| (pre, post.split_at(pos + 1))))
         .find_map(|(pre, (ext, post))| {
             (ext == "</color>")
                 .then_some(StackMutation::Pop)
-                .or_else(||
-                    parse_color_node(ext)
-                        .map(|RichColor(color)| StackMutation::Push(color))
-                )
+                .or_else(|| {
+                    parse_color_node(ext).map(|RichColor(color)| StackMutation::Push(color))
+                })
                 .map(|sm| (pre, post, Some(sm)))
         })
         .unwrap_or((s, "", None))
@@ -71,7 +58,9 @@ impl<'a> Enrich<'a> {
                     StackMutation::Push(value) => color_stack.push(value),
                     StackMutation::Pop => {
                         if cfg!(debug_assertions) && color_stack.is_empty() {
-                            println!("built-in messages should not contain excessive color stack pops");
+                            println!(
+                                "built-in messages should not contain excessive color stack pops"
+                            );
                         }
                         color_stack.pop();
                     }
@@ -100,7 +89,9 @@ impl<'a> Iterator for Enrich<'a> {
                     StackMutation::Push(value) => self.color_stack.push(value),
                     StackMutation::Pop => {
                         if cfg!(debug_assertions) && self.color_stack.is_empty() {
-                            println!("built-in messages should not contain excessive color stack pops");
+                            println!(
+                                "built-in messages should not contain excessive color stack pops"
+                            );
                         }
                         self.color_stack.pop();
                     }

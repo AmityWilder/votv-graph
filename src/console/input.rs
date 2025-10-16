@@ -1,6 +1,10 @@
-use std::{collections::VecDeque, ops::Range, time::{Duration, Instant}};
-use raylib::prelude::*;
 use crate::console_log;
+use raylib::prelude::*;
+use std::{
+    collections::VecDeque,
+    ops::Range,
+    time::{Duration, Instant},
+};
 
 use KeyboardKey::*;
 
@@ -101,10 +105,18 @@ impl ConsoleIn {
         self.current.as_str()
     }
 
-    fn insert_over_selection_internal(current: &mut String, selection_head: &mut usize, selection_tail: &mut usize, is_dirty: &mut bool, string: &str) {
+    fn insert_over_selection_internal(
+        current: &mut String,
+        selection_head: &mut usize,
+        selection_tail: &mut usize,
+        is_dirty: &mut bool,
+        string: &str,
+    ) {
         let selection = range_from_pair(*selection_head, *selection_tail);
         assert!(selection.start <= current.len() && selection.end <= current.len());
-        if selection.is_empty() && string.is_empty() { return; }
+        if selection.is_empty() && string.is_empty() {
+            return;
+        }
         let new_cursor = selection.start + string.chars().count();
         current.replace_range(selection, string);
         *selection_head = new_cursor;
@@ -123,7 +135,14 @@ impl ConsoleIn {
         );
     }
 
-    fn apply_input(&mut self, rl: &mut RaylibHandle, input: KeyOrChar, is_ctrl_down: bool, is_shift_down: bool, _is_alt_down: bool) -> bool {
+    fn apply_input(
+        &mut self,
+        rl: &mut RaylibHandle,
+        input: KeyOrChar,
+        is_ctrl_down: bool,
+        is_shift_down: bool,
+        _is_alt_down: bool,
+    ) -> bool {
         match input {
             KeyOrChar::Char(ch) => {
                 self.insert_over_selection(ch.encode_utf8(&mut [b'\0'; 4]));
@@ -131,7 +150,8 @@ impl ConsoleIn {
             }
 
             KeyOrChar::Key(key) => {
-                if !self.current.is_empty() && !self.current.contains(' ') && matches!(key, KEY_TAB) {
+                if !self.current.is_empty() && !self.current.contains(' ') && matches!(key, KEY_TAB)
+                {
                     {
                         // let mut prediction = Cmd::predict(&self.current);
                         // if let Some((cmd, _)) = prediction.next() {
@@ -146,29 +166,36 @@ impl ConsoleIn {
 
                 if is_ctrl_down {
                     match key {
-                        KEY_C | KEY_X => if self.selection_head != self.selection_tail && rl.set_clipboard_text(&self.current[self.selection_range()]).is_ok() {
-                            if key == KEY_X {
-                                self.insert_over_selection("");
+                        KEY_C | KEY_X => {
+                            if self.selection_head != self.selection_tail
+                                && rl
+                                    .set_clipboard_text(&self.current[self.selection_range()])
+                                    .is_ok()
+                            {
+                                if key == KEY_X {
+                                    self.insert_over_selection("");
+                                }
+                                return true;
                             }
-                            return true;
                         }
 
-                        KEY_V => if let Some(clipboard) = {
-                            // hack until raylib-rs fixes crash
-                            unsafe {
-                                let s = ffi::GetClipboardText();
-                                if !s.is_null() && s.is_aligned() {
-                                    std::ffi::CStr::from_ptr(s).to_str().ok()
-                                } else { None }
-                            }
-                        } {
-                            let clipboard = clipboard
-                                .lines()
-                                .collect::<Vec<&str>>()
-                                .join(";");
+                        KEY_V => {
+                            if let Some(clipboard) = {
+                                // hack until raylib-rs fixes crash
+                                unsafe {
+                                    let s = ffi::GetClipboardText();
+                                    if !s.is_null() && s.is_aligned() {
+                                        std::ffi::CStr::from_ptr(s).to_str().ok()
+                                    } else {
+                                        None
+                                    }
+                                }
+                            } {
+                                let clipboard = clipboard.lines().collect::<Vec<&str>>().join(";");
 
-                            self.insert_over_selection(&clipboard);
-                            return true;
+                                self.insert_over_selection(&clipboard);
+                                return true;
+                            }
                         }
 
                         KEY_A => {
@@ -184,7 +211,8 @@ impl ConsoleIn {
                 let erasure = (key == KEY_DELETE) as i8 - (key == KEY_BACKSPACE) as i8;
                 if erasure != 0 {
                     if self.selection_range().is_empty() {
-                        let size = is_ctrl_down.then_some(())
+                        let size = is_ctrl_down
+                            .then_some(())
                             .and_then(|()| {
                                 let mid = self.selection_tail;
                                 if erasure > 0 {
@@ -211,9 +239,15 @@ impl ConsoleIn {
                 let y_movement = (key == KEY_UP) as i8 - (key == KEY_DOWN) as i8;
                 if y_movement != 0 {
                     self.history_offset = if y_movement > 0 {
-                        if self.history_offset + 1 < self.history.len() + 1 { self.history_offset + 1 } else { 0 }
+                        if self.history_offset + 1 < self.history.len() + 1 {
+                            self.history_offset + 1
+                        } else {
+                            0
+                        }
                     } else {
-                        self.history_offset.checked_sub(1).unwrap_or(self.history.len() + 1 - 1)
+                        self.history_offset
+                            .checked_sub(1)
+                            .unwrap_or(self.history.len() + 1 - 1)
                     };
 
                     self.selection_head = 0;
@@ -223,7 +257,8 @@ impl ConsoleIn {
                         &mut self.selection_head,
                         &mut self.selection_tail,
                         &mut self.is_dirty,
-                        self.history.get(self.history_offset)
+                        self.history
+                            .get(self.history_offset)
                             .map(String::as_str)
                             .unwrap_or_default(),
                     );
@@ -231,11 +266,12 @@ impl ConsoleIn {
                     return true;
                 }
 
-                if matches!(key, KEY_RIGHT|KEY_LEFT | KEY_HOME|KEY_END) {
+                if matches!(key, KEY_RIGHT | KEY_LEFT | KEY_HOME | KEY_END) {
                     self.selection_tail = match key {
                         KEY_RIGHT | KEY_LEFT => {
                             let x_movement = (key == KEY_RIGHT) as i8 - (key == KEY_LEFT) as i8;
-                            let size = is_ctrl_down.then_some(())
+                            let size = is_ctrl_down
+                                .then_some(())
                                 .and_then(|()| {
                                     let mid = self.selection_tail;
                                     if x_movement > 0 {
@@ -256,12 +292,14 @@ impl ConsoleIn {
                                 }
                             } else {
                                 if x_movement > 0 {
-                                    self.selection_tail.saturating_add(size).min(self.current.len())
+                                    self.selection_tail
+                                        .saturating_add(size)
+                                        .min(self.current.len())
                                 } else {
                                     self.selection_tail.saturating_sub(size)
                                 }
                             }
-                        },
+                        }
                         KEY_HOME => 0,
                         KEY_END => self.current.len(),
                         _ => unreachable!(),
@@ -279,12 +317,15 @@ impl ConsoleIn {
     }
 
     pub fn update_input(&mut self, rl: &mut RaylibHandle) -> bool {
-        if let Some((rep_input, _)) = &self.last_keypress && rep_input.to_key().is_none_or(|k| rl.is_key_released(k)) {
+        if let Some((rep_input, _)) = &self.last_keypress
+            && rep_input.to_key().is_none_or(|k| rl.is_key_released(k))
+        {
             self.last_keypress = None;
         }
 
         if self.is_focused {
-            let is_ctrl_down = rl.is_key_down(KEY_LEFT_CONTROL) || rl.is_key_down(KEY_RIGHT_CONTROL);
+            let is_ctrl_down =
+                rl.is_key_down(KEY_LEFT_CONTROL) || rl.is_key_down(KEY_RIGHT_CONTROL);
             let is_shift_down = rl.is_key_down(KEY_LEFT_SHIFT) || rl.is_key_down(KEY_RIGHT_SHIFT);
             let is_alt_down = rl.is_key_down(KEY_LEFT_ALT) || rl.is_key_down(KEY_RIGHT_ALT);
 
@@ -301,7 +342,13 @@ impl ConsoleIn {
                 const REP: Duration = Duration::from_millis(33);
                 if pressed_time.elapsed() >= DELAY {
                     *pressed_time = Instant::now() - DELAY + REP;
-                    return self.apply_input(rl, rep_input, is_ctrl_down, is_shift_down, is_alt_down);
+                    return self.apply_input(
+                        rl,
+                        rep_input,
+                        is_ctrl_down,
+                        is_shift_down,
+                        is_alt_down,
+                    );
                 }
             }
         }
@@ -316,7 +363,8 @@ impl ConsoleIn {
             console_log!(cout, Ghost, "{msg}");
             self.selection_head = 0;
             self.selection_tail = 0;
-            self.history.front()
+            self.history
+                .front()
                 .map(String::as_str)
                 .expect("should have at least one element after push")
         })

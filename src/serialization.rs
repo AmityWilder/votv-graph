@@ -1,6 +1,6 @@
-use std::{str::FromStr, ops::Range};
 use crate::graph::{Edge, Vertex, VertexID, WeightedGraph};
 use raylib::prelude::*;
+use std::{ops::Range, str::FromStr};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version {
@@ -10,27 +10,29 @@ pub struct Version {
 }
 impl Version {
     pub const fn new(major: u8, minor: u8, patch: u16) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 }
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { major, minor, patch } = self;
+        let Self {
+            major,
+            minor,
+            patch,
+        } = self;
         write!(f, "{major}.{minor}.{patch}")
     }
 }
 impl FromStr for Version {
     type Err = std::num::ParseIntError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (major, (minor, patch)) = s.split_once('.')
-            .map_or(
-                (s, ("0", "0")),
-                |(major, rest)| (
-                    major,
-                    rest.split_once('.')
-                        .unwrap_or((rest, "0"))
-                )
-            );
+        let (major, (minor, patch)) = s.split_once('.').map_or((s, ("0", "0")), |(major, rest)| {
+            (major, rest.split_once('.').unwrap_or((rest, "0")))
+        });
         Ok(Self::new(major.parse()?, minor.parse()?, patch.parse()?))
     }
 }
@@ -46,7 +48,8 @@ impl<'a, 'src: 'a> Source<&'src str> {
     fn new(line: usize, substr: &'a str, code: &'src str) -> Self {
         Source {
             line,
-            range: code.substr_range(substr)
+            range: code
+                .substr_range(substr)
                 .expect("`substr` should be a slice within `code`"),
             code,
         }
@@ -86,7 +89,10 @@ pub struct LoadGraphError {
 }
 impl LoadGraphError {
     fn new(src: Source<&str>, kind: LoadGraphErrorKind) -> Self {
-        Self { src: src.into(), kind }
+        Self {
+            src: src.into(),
+            kind,
+        }
     }
 
     fn unexpected_eof<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str) -> Self {
@@ -95,13 +101,26 @@ impl LoadGraphError {
     fn missing_version<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str) -> Self {
         Self::new(Source::new(line, substr, code), MissingVersion)
     }
-    fn unknown_version<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, version: Version) -> Self {
-        Self::new(Source::new(line, substr, code), IncompatibleVersion(version))
+    fn unknown_version<'a, 'src: 'a>(
+        line: usize,
+        substr: &'a str,
+        code: &'src str,
+        version: Version,
+    ) -> Self {
+        Self::new(
+            Source::new(line, substr, code),
+            IncompatibleVersion(version),
+        )
     }
     fn unknown_vertex<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str) -> Self {
         Self::new(Source::new(line, substr, code), UnknownVertex)
     }
-    fn duplicate_name<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, prev: Source<&str>) -> Self {
+    fn duplicate_name<'a, 'src: 'a>(
+        line: usize,
+        substr: &'a str,
+        code: &'src str,
+        prev: Source<&str>,
+    ) -> Self {
         Self::new(Source::new(line, substr, code), DuplicateName(prev.into()))
     }
     fn empty_name<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str) -> Self {
@@ -116,13 +135,28 @@ impl LoadGraphError {
     fn unexpected<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str) -> Self {
         Self::new(Source::new(line, substr, code), Unexpected)
     }
-    fn parse_int<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, e: std::num::ParseIntError) -> Self {
+    fn parse_int<'a, 'src: 'a>(
+        line: usize,
+        substr: &'a str,
+        code: &'src str,
+        e: std::num::ParseIntError,
+    ) -> Self {
         Self::new(Source::new(line, substr, code), ParseInt(e))
     }
-    fn parse_float<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, e: std::num::ParseFloatError) -> Self {
+    fn parse_float<'a, 'src: 'a>(
+        line: usize,
+        substr: &'a str,
+        code: &'src str,
+        e: std::num::ParseFloatError,
+    ) -> Self {
         Self::new(Source::new(line, substr, code), ParseFloat(e))
     }
-    fn usize_to_vertex_id<'a, 'src: 'a>(line: usize, substr: &'a str, code: &'src str, e: std::num::TryFromIntError) -> Self {
+    fn usize_to_vertex_id<'a, 'src: 'a>(
+        line: usize,
+        substr: &'a str,
+        code: &'src str,
+        e: std::num::TryFromIntError,
+    ) -> Self {
         Self::new(Source::new(line, substr, code), UsizeToVertexID(e))
     }
 }
@@ -132,9 +166,14 @@ impl std::fmt::Display for LoadGraphError {
         match &self.kind {
             UnexpectedEOF => f.write_str("unexpected end of file"),
             MissingVersion => f.write_str("missing version number"),
-            IncompatibleVersion(v) => write!(f, "incompatible version number: {v} (current: {CURRENT_VERSION})"),
+            IncompatibleVersion(v) => write!(
+                f,
+                "incompatible version number: {v} (current: {CURRENT_VERSION})"
+            ),
             UnknownVertex => write!(f, "edge references an unknown vertex"),
-            DuplicateName(prev) => write!(f, "the name (alias or ID) `{}` appears on multiple vertices (first appearance on line {})",
+            DuplicateName(prev) => write!(
+                f,
+                "the name (alias or ID) `{}` appears on multiple vertices (first appearance on line {})",
                 &prev.code[prev.range.clone()],
                 prev.line + 1,
             ),
@@ -144,7 +183,11 @@ impl std::fmt::Display for LoadGraphError {
             Unexpected => f.write_str("unexpected text"),
             ParseInt(_) => f.write_str("error while trying to parse an integer"),
             ParseFloat(_) => f.write_str("error while trying to parse a float"),
-            UsizeToVertexID(_) => write!(f, "failed to convert integer to ID, make sure you have {} vertices or fewer", VertexID::MAX),
+            UsizeToVertexID(_) => write!(
+                f,
+                "failed to convert integer to ID, make sure you have {} vertices or fewer",
+                VertexID::MAX
+            ),
         }?;
         let line_msg = match &self.kind {
             UnexpectedEOF => "",
@@ -160,18 +203,20 @@ impl std::fmt::Display for LoadGraphError {
             ParseFloat(_) => "expected a float",
             UsizeToVertexID(_) => unimplemented!(),
         };
-        let mut snippet = format!("<color = #288cfa>{:>4} |</color>    <color = #c8c8c8>{}</color>\
+        let mut snippet = format!(
+            "<color = #288cfa>{:>4} |</color>    <color = #c8c8c8>{}</color>\
                                   \n     <color = #288cfa>|</color>    {:<space$}{:^<squig$} {line_msg}",
             self.src.line + 1,
             self.src.code,
             "",
             "",
-            space=self.src.range.start,
-            squig=self.src.range.len().max(1),
+            space = self.src.range.start,
+            squig = self.src.range.len().max(1),
         );
         if let DuplicateName(prev) = &self.kind {
             let line_msg = "first ocurrance here";
-            snippet = format!("<color = #288cfa>{:>4} |</color>    <color = #c8c8c8>{}</color>\
+            snippet = format!(
+                "<color = #288cfa>{:>4} |</color>    <color = #c8c8c8>{}</color>\
                               \n     <color = #288cfa>|</color>    {:<space$}<color = #288cfa>{:-<squig$} {line_msg}</color>\
                               \n    <color = #288cfa>...</color>\
                               \n{snippet}",
@@ -179,8 +224,8 @@ impl std::fmt::Display for LoadGraphError {
                 prev.code,
                 "",
                 "",
-                space=prev.range.start,
-                squig=prev.range.len().max(1),
+                space = prev.range.start,
+                squig = prev.range.len().max(1),
             )
         }
         write!(f, "\ncode:\n{snippet}")?;
@@ -190,7 +235,7 @@ impl std::fmt::Display for LoadGraphError {
 impl std::error::Error for LoadGraphError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.kind {
-            | UnexpectedEOF
+            UnexpectedEOF
             | MissingVersion
             | IncompatibleVersion(_)
             | UnknownVertex
@@ -198,8 +243,7 @@ impl std::error::Error for LoadGraphError {
             | EmptyName
             | InvalidName
             | IncompletePosition
-            | Unexpected
-                => None,
+            | Unexpected => None,
 
             ParseInt(e) => Some(e),
             ParseFloat(e) => Some(e),
@@ -219,11 +263,12 @@ fn find_vert<'a, 'src: 'a>(
     code: &'src str,
     s: &'a str,
 ) -> Result<VertexID, LoadGraphError> {
-    verts.iter()
+    verts
+        .iter()
         .position(|v| v.alias.as_str() == s || v.id.as_str() == s)
-            .ok_or_else(|| LoadGraphError::unknown_vertex(line, s, code))?
+        .ok_or_else(|| LoadGraphError::unknown_vertex(line, s, code))?
         .try_into()
-            .map_err(|e| LoadGraphError::usize_to_vertex_id(line, s, code, e))
+        .map_err(|e| LoadGraphError::usize_to_vertex_id(line, s, code, e))
 }
 
 fn pos_component<'a, 'src: 'a>(
@@ -231,8 +276,15 @@ fn pos_component<'a, 'src: 'a>(
     code: &'src str,
     iter: &mut std::str::Split<'a, char>,
 ) -> Result<f32, LoadGraphError> {
-    let comp = iter.next()
-            .ok_or_else(|| LoadGraphError::incomplete_position(line, iter.remainder().unwrap_or_else(|| &code[code.len() - 1..]), code))?
+    let comp = iter
+        .next()
+        .ok_or_else(|| {
+            LoadGraphError::incomplete_position(
+                line,
+                iter.remainder().unwrap_or_else(|| &code[code.len() - 1..]),
+                code,
+            )
+        })?
         .trim();
 
     comp.parse()
@@ -255,25 +307,28 @@ fn parse_edge<'a, 'src: 'a>(
 
     weight_str = weight_str.trim();
     let weight_start = weight_str.chars().next();
-    let weight =
-        if weight_start.is_none_or(|ch| matches!(ch, '*'|'+')) {
-            let distance = verts[adj[0] as usize].pos.distance(verts[adj[1] as usize].pos);
-            if let Some(ch) = weight_start {
-                weight_str = weight_str[1..].trim_start();
-                let weight_aug = weight_str.parse::<f32>()
-                    .map_err(|e| LoadGraphError::parse_float(line, weight_str, code, e))?;
-                match ch {
-                    '*' => distance*weight_aug,
-                    '+' => distance + weight_aug,
-                    _ => unreachable!(),
-                }
-            } else {
-                distance
+    let weight = if weight_start.is_none_or(|ch| matches!(ch, '*' | '+')) {
+        let distance = verts[adj[0] as usize]
+            .pos
+            .distance_to(verts[adj[1] as usize].pos);
+        if let Some(ch) = weight_start {
+            weight_str = weight_str[1..].trim_start();
+            let weight_aug = weight_str
+                .parse::<f32>()
+                .map_err(|e| LoadGraphError::parse_float(line, weight_str, code, e))?;
+            match ch {
+                '*' => distance * weight_aug,
+                '+' => distance + weight_aug,
+                _ => unreachable!(),
             }
         } else {
-            weight_str.parse()
-                .map_err(|e| LoadGraphError::parse_float(line, weight_str, code, e))?
-        };
+            distance
+        }
+    } else {
+        weight_str
+            .parse()
+            .map_err(|e| LoadGraphError::parse_float(line, weight_str, code, e))?
+    };
 
     Ok(Edge { adj, weight })
 }
@@ -291,19 +346,36 @@ fn parse_vert<'a, 'b: 'a, 'src: 'b>(
     (name, pos_str): (&'a str, &'a str),
     vert_creation: &[VertCreation<'b, 'src>],
 ) -> Result<(VertCreation<'a, 'src>, Vertex), LoadGraphError> {
-    let (id, alias, creation) =
-        if let Some((mut id, mut alias)) = name.split_once(':') {
-            (id, alias) = (id.trim(), alias.trim());
-            (id, alias, VertCreation { line, id, alias: Some(alias), code })
-        } else {
-            let id = name.trim();
-            (id, id, VertCreation { line, id, alias: None, code })
-        };
+    let (id, alias, creation) = if let Some((mut id, mut alias)) = name.split_once(':') {
+        (id, alias) = (id.trim(), alias.trim());
+        (
+            id,
+            alias,
+            VertCreation {
+                line,
+                id,
+                alias: Some(alias),
+                code,
+            },
+        )
+    } else {
+        let id = name.trim();
+        (
+            id,
+            id,
+            VertCreation {
+                line,
+                id,
+                alias: None,
+                code,
+            },
+        )
+    };
 
     for name in [id, alias] {
         // check for empty
         if name.is_empty() {
-            return Err(LoadGraphError::empty_name(line, name, code))
+            return Err(LoadGraphError::empty_name(line, name, code));
         }
 
         // check for invalid
@@ -317,26 +389,32 @@ fn parse_vert<'a, 'b: 'a, 'src: 'b>(
                 if let Some(invalid_len) = invalid.find(|ch| !is_invalid(ch)) {
                     invalid = &invalid[..invalid_len];
                 }
-                return Err(LoadGraphError::invalid_name(line, invalid, code))
+                return Err(LoadGraphError::invalid_name(line, invalid, code));
             }
         }
 
         // check for duplicates
         {
-            let dupe = vert_creation.iter()
-                .find_map(|prev_creation|
-                    std::iter::once(prev_creation.id).chain(prev_creation.alias.into_iter())
-                        .find_map(|prev_name| name.eq_ignore_ascii_case(prev_name)
-                            .then(|| (
+            let dupe = vert_creation.iter().find_map(|prev_creation| {
+                std::iter::once(prev_creation.id)
+                    .chain(prev_creation.alias.into_iter())
+                    .find_map(|prev_name| {
+                        name.eq_ignore_ascii_case(prev_name).then(|| {
+                            (
                                 Source::new(prev_creation.line, prev_name, prev_creation.code),
                                 name,
-                            )))
-                );
+                            )
+                        })
+                    })
+            });
 
             if let Some((prev, curr_name)) = dupe {
-                debug_assert_ne!(prev.line, line, "alias == id should not be considered a duplicate");
+                debug_assert_ne!(
+                    prev.line, line,
+                    "alias == id should not be considered a duplicate"
+                );
 
-                return Err(LoadGraphError::duplicate_name(line, curr_name, code, prev))
+                return Err(LoadGraphError::duplicate_name(line, curr_name, code, prev));
             }
         }
     }
@@ -363,42 +441,59 @@ impl WeightedGraph {
 
         // Check version
         {
-            let (line, full_code) = line_iter.next()
-                .ok_or(LoadGraphError::unexpected_eof(0, &bytes[0..0], bytes))?;
+            let (line, full_code) =
+                line_iter
+                    .next()
+                    .ok_or(LoadGraphError::unexpected_eof(0, &bytes[0..0], bytes))?;
 
             if !full_code.starts_with('v') {
-                return Err(LoadGraphError::missing_version(line, &full_code[..1], full_code));
+                return Err(LoadGraphError::missing_version(
+                    line,
+                    &full_code[..1],
+                    full_code,
+                ));
             }
 
             let version_str = &full_code[1..];
 
-            let version = version_str.parse::<Version>()
+            let version = version_str
+                .parse::<Version>()
                 .map_err(|e| LoadGraphError::parse_int(line, version_str, full_code, e))?;
 
             if version > CURRENT_VERSION {
-                return Err(LoadGraphError::unknown_version(line, version_str, full_code, version));
+                return Err(LoadGraphError::unknown_version(
+                    line,
+                    version_str,
+                    full_code,
+                    version,
+                ));
             }
         }
 
-        let (vert_count_est, edge_count_est) = bytes
-            .lines()
-            .fold((0, 0), |(v, e), mut line| {
-                if let Some(comment_pos) = line.find("//") {
-                    line = &line[..comment_pos];
-                }
-                if line.contains('=') { (v + 1, e) }
-                else if line.contains("--") { (v, e + 1) }
-                else { (v, e) }
-            });
+        let (vert_count_est, edge_count_est) = bytes.lines().fold((0, 0), |(v, e), mut line| {
+            if let Some(comment_pos) = line.find("//") {
+                line = &line[..comment_pos];
+            }
+            if line.contains('=') {
+                (v + 1, e)
+            } else if line.contains("--") {
+                (v, e + 1)
+            } else {
+                (v, e)
+            }
+        });
 
         let mut vert_creation: Vec<VertCreation> = Vec::with_capacity(vert_count_est);
         let mut verts = Vec::with_capacity(vert_count_est);
         let mut edges = Vec::with_capacity(edge_count_est);
         for (line, code) in line_iter {
-            let pre_comment = code.find("//")
+            let pre_comment = code
+                .find("//")
                 .map_or(code, |comment_pos| &code[..comment_pos]);
 
-            if pre_comment.trim().is_empty() { continue; }
+            if pre_comment.trim().is_empty() {
+                continue;
+            }
 
             if let Some(edge_code) = pre_comment.split_once("--") {
                 // edge
@@ -418,13 +513,22 @@ impl WeightedGraph {
 
     pub fn save_to_memory(&self) -> String {
         std::iter::once(format!("v{CURRENT_VERSION}"))
-            .chain(self.verts().iter().map(|v| format!("{}:{}={},{},{}", &v.id, &v.alias, v.pos.x, v.pos.y, v.pos.z)))
+            .chain(
+                self.verts()
+                    .iter()
+                    .map(|v| format!("{}:{}={},{},{}", &v.id, &v.alias, v.pos.x, v.pos.y, v.pos.z)),
+            )
             .chain(self.edges().iter().map(|e| {
                 fn shorter<'a>(str1: &'a str, str2: &'a str) -> &'a str {
                     if str1.len() < str2.len() { str1 } else { str2 }
                 }
                 let [a, b] = e.adj.map(|v| self.vert(v));
-                format!("{}--{}:{}", shorter(&a.id, &a.alias), shorter(&b.id, &b.alias), e.weight)
+                format!(
+                    "{}--{}:{}",
+                    shorter(&a.id, &a.alias),
+                    shorter(&b.id, &b.alias),
+                    e.weight
+                )
             }))
             .collect::<Vec<_>>()
             .join("\n")
@@ -433,8 +537,8 @@ impl WeightedGraph {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
     use super::*;
+    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_empty() {
@@ -511,9 +615,11 @@ mod tests {
 
     #[test]
     fn test1() {
-        let bytes = format!("\
+        let bytes = format!(
+            "\
             v0.0.1\
-            ");
+            "
+        );
 
         let g = WeightedGraph::load_from_memory(bytes);
 

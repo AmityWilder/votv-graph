@@ -1,5 +1,11 @@
-use std::{collections::VecDeque, time::{Duration, Instant}};
-use crate::{console::{console_dbg, console_log, output::ConsoleOut}, graph::{Adjacent, VertexID, WeightedGraph}};
+use crate::{
+    console::{console_dbg, console_log, output::ConsoleOut},
+    graph::{Adjacent, VertexID, WeightedGraph},
+};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 pub enum Phase {
     None,
@@ -45,7 +51,11 @@ pub enum VertexClass {
 }
 
 impl RouteGenerator {
-    pub fn new(num_verts: usize, start: VertexID, targets: impl IntoIterator<Item = VertexID>) -> Self {
+    pub fn new(
+        num_verts: usize,
+        start: VertexID,
+        targets: impl IntoIterator<Item = VertexID>,
+    ) -> Self {
         Self {
             targets: Vec::from_iter(targets),
             result: vec![start],
@@ -70,7 +80,11 @@ impl RouteGenerator {
         if let Phase::Edge { current, i } = &self.phase {
             if &v == current {
                 return Some(VertexClass::Current);
-            } else if graph.adjacent(*current).get(*i).is_some_and(|x| v == x.vertex) {
+            } else if graph
+                .adjacent(*current)
+                .get(*i)
+                .is_some_and(|x| v == x.vertex)
+            {
                 return Some(VertexClass::Adjacent);
             }
         }
@@ -99,7 +113,10 @@ impl RouteGenerator {
         console_dbg!(cout, Info, 2, "looking at vertex {}", self.root);
         self.queue.clear();
         self.visited.fill(const { None });
-        self.visited[self.root as usize] = Some(Visit { distance: 0.0, parent: None });
+        self.visited[self.root as usize] = Some(Visit {
+            distance: 0.0,
+            parent: None,
+        });
         self.phase = Phase::Edge {
             current: self.root,
             i: 0,
@@ -124,7 +141,11 @@ impl RouteGenerator {
         };
     }
 
-    pub fn add_targets(&mut self, cout: &mut ConsoleOut, targets: impl IntoIterator<Item = VertexID>) {
+    pub fn add_targets(
+        &mut self,
+        cout: &mut ConsoleOut,
+        targets: impl IntoIterator<Item = VertexID>,
+    ) {
         self.is_finished = false;
         self.targets.extend(targets);
         self.begin_phase_edge(cout);
@@ -134,13 +155,26 @@ impl RouteGenerator {
         debug_assert!(!self.is_finished, "do not continue finished route");
         match &mut self.phase {
             Phase::None => {
-                console_dbg!(cout, Info, 0, "root set to vertex {}; targeting {:?}", self.root, self.targets);
+                console_dbg!(
+                    cout,
+                    Info,
+                    0,
+                    "root set to vertex {}; targeting {:?}",
+                    self.root,
+                    self.targets
+                );
                 self.begin_phase_edge(cout);
             }
 
             Phase::Edge { current, i } => {
                 if let Some(&Adjacent { vertex, weight }) = graph.adjacent(*current).get(*i) {
-                    console_dbg!(cout, Info, 2, "looking at vertex {current} ({i}/{})", graph.adjacent(*current).len());
+                    console_dbg!(
+                        cout,
+                        Info,
+                        2,
+                        "looking at vertex {current} ({i}/{})",
+                        graph.adjacent(*current).len()
+                    );
                     if self.visited[vertex as usize].is_none() {
                         self.queue.push_back(vertex);
                         console_dbg!(cout, Info, 3, "pushed vertex {vertex} to queue");
@@ -151,10 +185,22 @@ impl RouteGenerator {
                             }
                         }
                     }
-                    let distance = self.visited[*current as usize].expect("current must have been visited if it is queued").distance + weight;
-                    console_dbg!(cout, Info, 3, "vertex {vertex} is {distance} from root (vertex {}) through vertex {current}", self.root);
+                    let distance = self.visited[*current as usize]
+                        .expect("current must have been visited if it is queued")
+                        .distance
+                        + weight;
+                    console_dbg!(
+                        cout,
+                        Info,
+                        3,
+                        "vertex {vertex} is {distance} from root (vertex {}) through vertex {current}",
+                        self.root
+                    );
                     if self.visited[vertex as usize].is_none_or(|visit| distance < visit.distance) {
-                        self.visited[vertex as usize] = Some(Visit { distance, parent: Some(*current) });
+                        self.visited[vertex as usize] = Some(Visit {
+                            distance,
+                            parent: Some(*current),
+                        });
                         console_dbg!(cout, Info, 4, "new best");
                     }
                     *i += 1;
@@ -166,13 +212,30 @@ impl RouteGenerator {
                 }
             }
 
-            Phase::Target { shortest_distance, nearest_target, i } => {
+            Phase::Target {
+                shortest_distance,
+                nearest_target,
+                i,
+            } => {
                 if *i < self.targets.len() {
                     let v = self.targets[*i];
                     if let Some(Visit { distance, .. }) = self.visited[v as usize] {
-                        console_dbg!(cout, Info, 2, "target {} (vertex {v}) is {distance} from root (vertex {})", *i, self.root);
+                        console_dbg!(
+                            cout,
+                            Info,
+                            2,
+                            "target {} (vertex {v}) is {distance} from root (vertex {})",
+                            *i,
+                            self.root
+                        );
                         if distance < *shortest_distance {
-                            console_dbg!(cout, Info, 3, "updating nearest target to {} (vertex {v})", *i);
+                            console_dbg!(
+                                cout,
+                                Info,
+                                3,
+                                "updating nearest target to {} (vertex {v})",
+                                *i
+                            );
                             *shortest_distance = distance;
                             *nearest_target = *i;
                         }
@@ -184,13 +247,22 @@ impl RouteGenerator {
                 } else {
                     assert!(*nearest_target < self.targets.len());
                     self.root = self.targets.swap_remove(*nearest_target);
-                    console_dbg!(cout, Info, 2, "nearest target identified as vertex {}", self.root);
+                    console_dbg!(
+                        cout,
+                        Info,
+                        2,
+                        "nearest target identified as vertex {}",
+                        self.root
+                    );
                     self.begin_phase_backtrack(cout);
                 }
             }
 
             Phase::Backtrack { parent, insert_at } => {
-                if let Some(Visit { parent: Some(p), .. }) = &self.visited[*parent as usize] {
+                if let Some(Visit {
+                    parent: Some(p), ..
+                }) = &self.visited[*parent as usize]
+                {
                     self.result.insert(*insert_at, *parent);
                     *parent = *p;
                 } else {

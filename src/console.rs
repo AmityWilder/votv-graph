@@ -24,4 +24,4 @@ macro_rules! console_dbg {
     };
 }
 
-pub(crate) use {console_log, console_dbg};
+pub(crate) use {console_dbg, console_log};

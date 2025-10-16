@@ -14,8 +14,7 @@ impl<'a> Snippet<'a> {
     }
 
     fn make_insertion_ranges(s: &str) -> Vec<std::ops::Range<usize>> {
-        s
-            .match_indices("$(")
+        s.match_indices("$(")
             .filter_map(|(start, _)| {
                 let substr = &s[start + 2..];
                 substr
@@ -40,9 +39,17 @@ impl<'a> Snippet<'a> {
         }
     }
 
-    fn apply<'b>(&self, insertions: impl ExactSizeIterator<Item = &'b str> + DoubleEndedIterator) -> String {
+    fn apply<'b>(
+        &self,
+        insertions: impl ExactSizeIterator<Item = &'b str> + DoubleEndedIterator,
+    ) -> String {
         let mut s = self.text.to_string();
-        for (range, rep) in self.insertion_ranges[0..insertions.len()].iter().cloned().zip(insertions).rev() {
+        for (range, rep) in self.insertion_ranges[0..insertions.len()]
+            .iter()
+            .cloned()
+            .zip(insertions)
+            .rev()
+        {
             s.replace_range(range, rep);
         }
         s
