@@ -1,10 +1,19 @@
+use nom::{
+    IResult, Parser,
+    bytes::complete::{is_a, tag, take_while_m_n},
+    character::complete::char,
+    combinator::{map_res, opt},
+    multi::separated_list1,
+    number::complete::float,
+    sequence::{delimited, separated_pair},
+};
 use raylib::prelude::*;
 use std::{
-    error::Error,
     fmt::{self, Display, Formatter},
     num::{NonZeroU32, ParseFloatError, ParseIntError},
     str::FromStr,
 };
+use thiserror::Error;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct NonNaNF32(f32);
@@ -81,74 +90,40 @@ impl NonNaNF32 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseCoordsError {
+    #[error("expected `x:<???>/y:<???>[/z:<???>]`")]
     Invalid,
+
+    #[error("failed to read number")]
+    #[from(ParseFloatError)]
     ParseFloat(ParseFloatError),
-}
-
-impl Display for ParseCoordsError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Invalid => f.write_str("expected `x:<???>/y:<???>[/z:<???>]`"),
-            Self::ParseFloat(_) => f.write_str("failed to read number"),
-        }
-    }
-}
-
-impl Error for ParseCoordsError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Invalid => None,
-            Self::ParseFloat(e) => Some(e),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Coords(pub Vector3);
 
-impl FromStr for Coords {
-    type Err = ParseCoordsError;
+fn coords(input: &str) -> IResult<&str, Coords> {
+    let (input, ((_, x), (_, y), z)) = (
+        (tag("x:"), float),
+        (tag("/y:"), float),
+        opt((tag("/z:"), float)),
+    )
+        .parse(input)?;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut it = s.split('/').zip(["x:", "y:", "z:"]).map(|(s, pre)| {
-            s.strip_prefix(pre)
-                .ok_or(ParseCoordsError::Invalid)
-                .and_then(|n| n.parse::<f32>().map_err(ParseCoordsError::ParseFloat))
-        });
+    let z = z.map_or(0.0, |(_, z)| z);
 
-        let x = it.next().ok_or(ParseCoordsError::Invalid).and_then(|x| x)?;
-        let y = it.next().ok_or(ParseCoordsError::Invalid).and_then(|x| x)?;
-        let z = if let Some(x) = it.next() { x? } else { 0.0 };
-        Ok(Self(Vector3 { x, y, z }))
-    }
+    Ok((input, Coords(Vector3 { x, y, z })))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseTempoError {
+    #[error("expected `reset|sync|sprint|instant|pause|ticks:<???>/ms:<???>`")]
     Invalid,
+
+    #[error("failed to read number")]
+    #[from(ParseIntError)]
     ParseInt(ParseIntError),
-}
-
-impl Display for ParseTempoError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Invalid => {
-                f.write_str("expected `reset|sync|sprint|instant|pause|ticks:<???>/ms:<???>`")
-            }
-            Self::ParseInt(_) => f.write_str("failed to read number"),
-        }
-    }
-}
-
-impl Error for ParseTempoError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Invalid => None,
-            Self::ParseInt(e) => Some(e),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -369,45 +344,31 @@ impl RichColor {
     ];
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseColorError {
+    #[error("a color string must be ASCII, not UTF")]
     NonAscii,
-    UnknownSyntax,
-    UnknownName,
-    BadInt(std::num::ParseIntError),
-    BadConversion(std::num::TryFromIntError),
-    BadFloat(std::num::ParseFloatError),
-    BadComponentCount,
-}
-impl std::fmt::Display for ParseColorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NonAscii => f.write_str("a color string must be ASCII, not UTF"),
-            Self::UnknownSyntax => f.write_str("the color format does not match any known syntax"),
-            Self::UnknownName => f.write_str(
-                "the color appears to be named but does not match a recognized color name",
-            ),
-            Self::BadInt(_) => f.write_str("failed to parse an integer"),
-            Self::BadConversion(_) => f.write_str("failed to convert an integer"),
-            Self::BadFloat(_) => f.write_str("failed to parse a float"),
-            Self::BadComponentCount => {
-                f.write_str("an invalid number of color components were provided")
-            }
-        }
-    }
-}
-impl std::error::Error for ParseColorError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::NonAscii | Self::UnknownSyntax | Self::UnknownName | Self::BadComponentCount => {
-                None
-            }
 
-            Self::BadInt(e) => Some(e),
-            Self::BadConversion(e) => Some(e),
-            Self::BadFloat(e) => Some(e),
-        }
-    }
+    #[error("the color format does not match any known syntax")]
+    UnknownSyntax,
+
+    #[error("the color appears to be named but does not match a recognized color name")]
+    UnknownName,
+
+    #[error("failed to parse an integer")]
+    #[from(std::num::ParseIntError)]
+    BadInt(std::num::ParseIntError),
+
+    #[error("failed to convert an integer")]
+    #[from(std::num::TryFromIntError)]
+    BadConversion(std::num::TryFromIntError),
+
+    #[error("failed to parse a float")]
+    #[from(std::num::ParseFloatError)]
+    BadFloat(std::num::ParseFloatError),
+
+    #[error("an invalid number of color components were provided")]
+    BadComponentCount,
 }
 
 impl std::str::FromStr for RichColor {

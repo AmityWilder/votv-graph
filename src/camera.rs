@@ -1,5 +1,6 @@
 use raylib::prelude::*;
 
+#[derive(Debug)]
 pub struct Orbiter {
     pub target: Vector3,
     pub length: f32,

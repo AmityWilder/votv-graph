@@ -10,10 +10,12 @@ impl WordsEx for str {
 
 const BRACKET_PAIRS: [(char, char); 4] = [('[', ']'), ('(', ')'), ('{', '}'), ('<', '>')];
 
+#[inline]
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
+#[derive(Debug, Clone)]
 pub struct Words<'a> {
     src: &'a str,
 }

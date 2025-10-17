@@ -1,3 +1,4 @@
+use clap::Parser as _;
 use clap_derive::Parser;
 use raylib::prelude::*;
 use std::{ops::ControlFlow, task::Poll};
@@ -19,6 +20,7 @@ pub mod snippet;
 // mod cmd;
 
 /// All information that can be affected by commands
+#[derive(Debug)]
 pub struct ProgramData {
     pub graph: WeightedGraph,
     pub route: Option<RouteGenerator>,
@@ -33,11 +35,19 @@ pub struct ProgramData {
     pub background_color: Color,
 }
 
-#[derive(Debug, Parser)]
-#[command(version, about, long_about)]
+#[derive(Debug, Clone, Parser)]
+#[command(version, about, long_about, rename_all = "snake_case")]
 pub enum Cmd {
     /// Display information about commands.
     Help,
+
+    /// Close the application.
+    #[command(long_about = "Closes the application immediately.")]
+    Quit,
+
+    /// Clear the console.
+    #[command(long_about = "Clear the console history text.")]
+    Cls,
 }
 
 // cmd! {
@@ -625,6 +635,7 @@ pub enum Cmd {
 //     }
 // }
 
+#[derive(Debug)]
 pub struct CmdRetDisplay;
 
 impl CmdRetDisplay {
@@ -633,6 +644,7 @@ impl CmdRetDisplay {
     }
 }
 
+#[derive(Debug)]
 pub struct CmdReturn {
     rets: Vec<String>,
     disp: Option<CmdRetDisplay>,
@@ -1385,6 +1397,7 @@ impl ParseVert for str {
     }
 }
 
+#[derive(Debug)]
 pub enum CmdPromise {
     Ready(CmdReturn),
     InteractiveTargets,
@@ -1441,6 +1454,7 @@ impl CmdPromise {
     }
 }
 
+#[derive(Debug)]
 pub struct Routine {
     prev_ret: CmdPromise,
     src: Vec<String>,
@@ -1460,37 +1474,40 @@ impl Routine {
         cin: &mut ConsoleIn,
         data: &mut ProgramData,
     ) -> ControlFlow<Result<CmdReturn, CmdError>> {
-        todo!()
-        // match self.prev_ret.poll(cout, cin, data) {
-        //     Poll::Ready(Ok(prev_ret)) => {
-        //         if let Some(line) = self.src.pop() {
-        //             let item = &line
-        //                 .split_whitespace()
-        //                 .chain(prev_ret.rets.iter().map(String::as_str))
-        //                 .collect::<Vec<&str>>()
-        //                 [..];
+        match self.prev_ret.poll(cout, cin, data) {
+            Poll::Ready(Ok(prev_ret)) => {
+                if let Some(line) = self.src.pop() {
+                    let item = &line
+                        .split_whitespace()
+                        .chain(prev_ret.rets.iter().map(String::as_str))
+                        .collect::<Vec<&str>>()[..];
 
-        //             if let [cmd, args @ ..] = item {
-        //                 let result = cmd.parse::<Cmd>()
-        //                     .and_then(|cmd| cmd.run(cout, cin, data, args));
-
-        //                 match result {
-        //                     Ok(ret) => {
-        //                         self.prev_ret = ret;
-        //                         ControlFlow::Continue(())
-        //                     }
-        //                     Err(e) => ControlFlow::Break(Err(e)),
-        //                 }
-        //             } else {
-        //                 ControlFlow::Break(Err(CmdError::NoSuchCmd(String::new())))
-        //             }
-        //         } else {
-        //             ControlFlow::Break(Ok(prev_ret))
-        //         }
-        //     }
-        //     Poll::Ready(Err(e)) => ControlFlow::Break(Err(e)),
-        //     Poll::Pending => ControlFlow::Continue(()),
-        // }
+                    // if let [cmd, args @ ..] = item {
+                    let result = Cmd::try_parse_from(item)
+                        //     .and_then(|cmd| cmd.run(cout, cin, data, args))
+                        ;
+                    // match result {
+                    //     Ok(ret) => {
+                    //         self.prev_ret = ret;
+                    //         ControlFlow::Continue(())
+                    //     }
+                    //     Err(e) => ControlFlow::Break(Err(e)),
+                    // }
+                    match result {
+                        Ok(cmd) => println!("{cmd:?}"),
+                        Err(e) => e.print().unwrap(),
+                    }
+                    ControlFlow::Break(Err(CmdError::Todo))
+                    // } else {
+                    //     ControlFlow::Break(Err(CmdError::NoSuchCmd { cmd: String::new() }))
+                    // }
+                } else {
+                    ControlFlow::Break(Ok(prev_ret))
+                }
+            }
+            Poll::Ready(Err(e)) => ControlFlow::Break(Err(e)),
+            Poll::Pending => ControlFlow::Continue(()),
+        }
     }
 }
 

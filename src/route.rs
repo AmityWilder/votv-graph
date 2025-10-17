@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Debug)]
 pub enum Phase {
     None,
     Edge {
@@ -30,6 +31,7 @@ pub struct Visit {
     pub parent: Option<VertexID>,
 }
 
+#[derive(Debug)]
 pub struct RouteGenerator {
     targets: Vec<VertexID>,
     result: Vec<VertexID>,

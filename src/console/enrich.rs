@@ -11,6 +11,7 @@ impl EnrichEx for str {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum StackMutation<T> {
     Push(T),
     Pop,
@@ -39,7 +40,7 @@ fn color_region(s: &str) -> (&str, &str, Option<StackMutation<Color>>) {
         .unwrap_or((s, "", None))
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Enrich<'a> {
     text: &'a str,
     root_color: Color,

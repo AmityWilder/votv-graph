@@ -33,22 +33,6 @@ mod route;
 mod serialization;
 mod types;
 
-pub trait MeasureTextEx {
-    #[inline]
-    #[must_use]
-    fn measure_text_ex(
-        &self,
-        font: impl AsRef<ffi::Font>,
-        text: &str,
-        font_size: f32,
-        spacing: f32,
-    ) -> Vector2 {
-        let c_text = std::ffi::CString::new(text).unwrap();
-        unsafe { ffi::MeasureTextEx(*font.as_ref(), c_text.as_ptr(), font_size, spacing) }.into()
-    }
-}
-impl MeasureTextEx for RaylibHandle {}
-
 const VERTEX_RADIUS: f32 = 8.0;
 const CAMERA_LENGTH_DEFAULT: f32 = 1300.0;
 const CAMERA_FOVY: f32 = 45.0;
@@ -443,7 +427,7 @@ fn main() {
                 for (v, vert) in data.graph.verts_iter() {
                     let pos = d.get_world_to_screen(vert.pos, camera);
                     let text = vert.alias.as_str();
-                    let text_size = d.measure_text_ex(&font, text, font.baseSize as f32, 0.0);
+                    let text_size = font.measure_text(text, font.baseSize as f32, 0.0);
                     d.draw_text_ex(
                         &font,
                         text,
@@ -540,7 +524,7 @@ fn main() {
                 {
                     let font_size = font.baseSize as f32;
                     let spacing = 0.0;
-                    let char_width = d.measure_text_ex(&font, "M", font_size, spacing).x;
+                    let char_width = font.measure_text("M", font_size, spacing).x;
                     let max_history_lines = ((d.get_screen_height() as f32 - SAFE_ZONE * 2.0)
                         / font.baseSize as f32
                         - 5.0)

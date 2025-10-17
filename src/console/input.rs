@@ -1,4 +1,6 @@
+use super::output::ConsoleOut;
 use crate::console_log;
+use KeyboardKey::*;
 use raylib::prelude::*;
 use std::{
     collections::VecDeque,
@@ -6,12 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use KeyboardKey::*;
-
 pub mod words;
 use words::WordsEx;
-
-use super::output::ConsoleOut;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum KeyOrChar {
@@ -28,6 +26,7 @@ impl KeyOrChar {
     }
 }
 
+#[derive(Debug)]
 pub struct ConsoleIn {
     last_keypress: Option<(KeyOrChar, Instant)>,
     history: VecDeque<String>,

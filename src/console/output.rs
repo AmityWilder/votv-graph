@@ -65,6 +65,7 @@ impl TryFrom<TraceLogLevel> for ConsoleLineCategory {
     }
 }
 
+#[derive(Debug)]
 pub struct ConsoleOut {
     log: VecDeque<String>,
     dbg: Vec<String>,

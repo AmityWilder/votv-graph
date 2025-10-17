@@ -561,7 +561,7 @@ mod tests {
             Err(LoadGraphError {
                 kind: LoadGraphErrorKind::MissingVersion,
                 src: Source { line: 0, range, code }
-            }) if &code[range.clone()] == ""
+            }) if code[range.clone()].is_empty()
         );
     }
 
@@ -615,11 +615,7 @@ mod tests {
 
     #[test]
     fn test1() {
-        let bytes = format!(
-            "\
-            v0.0.1\
-            "
-        );
+        let bytes = "v0.0.1";
 
         let g = WeightedGraph::load_from_memory(bytes);
 
