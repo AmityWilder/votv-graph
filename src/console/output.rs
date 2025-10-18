@@ -1,5 +1,6 @@
-use std::collections::VecDeque;
 use raylib::prelude::*;
+use std::collections::VecDeque;
+use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsoleLineCategory {
@@ -17,50 +18,44 @@ pub enum ConsoleLineCategory {
 impl ConsoleLineCategory {
     pub const fn color_prefix(self) -> (Color, &'static str) {
         let (mut c, pre) = match self {
-            Self::Route   => (Color::RAYWHITE,  "route: "  ),
+            Self::Route => (Color::RAYWHITE, "route: "),
             Self::Ghost | Self::Command => (Color::LIGHTBLUE, ">"),
-            Self::Trace   => (Color::DARKGRAY,  "trace: "  ),
-            Self::Debug   => (Color::MAGENTA,   "debug: "  ),
-            Self::Info    => (Color::LIGHTGRAY, ""         ),
-            Self::Warning => (Color::GOLD,      "warning: "),
-            Self::Error   => (Color::RED,       "err: "    ),
-            Self::Fatal   => (Color::SALMON,    "fatal: "  ),
+            Self::Trace => (Color::DARKGRAY, "trace: "),
+            Self::Debug => (Color::MAGENTA, "debug: "),
+            Self::Info => (Color::LIGHTGRAY, ""),
+            Self::Warning => (Color::GOLD, "warning: "),
+            Self::Error => (Color::RED, "err: "),
+            Self::Fatal => (Color::SALMON, "fatal: "),
         };
-        if matches!(self, Self::Ghost) { c.a /= 2; }
+        if matches!(self, Self::Ghost) {
+            c.a /= 2;
+        }
         (c, pre)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("the TraceLogLevel `{0:?}` is not intended for logging")]
 pub struct InvalidLogLevelError(TraceLogLevel);
-
-impl std::fmt::Display for InvalidLogLevelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the TraceLogLevel `{:?}` is not intended for logging", self.0)
-    }
-}
-
-impl std::error::Error for InvalidLogLevelError {}
 
 impl TryFrom<TraceLogLevel> for ConsoleLineCategory {
     type Error = InvalidLogLevelError;
 
     fn try_from(value: TraceLogLevel) -> Result<Self, InvalidLogLevelError> {
         match value {
-            TraceLogLevel::LOG_TRACE   => Ok(Self::Trace),
-            TraceLogLevel::LOG_DEBUG   => Ok(Self::Debug),
-            TraceLogLevel::LOG_INFO    => Ok(Self::Info),
+            TraceLogLevel::LOG_TRACE => Ok(Self::Trace),
+            TraceLogLevel::LOG_DEBUG => Ok(Self::Debug),
+            TraceLogLevel::LOG_INFO => Ok(Self::Info),
             TraceLogLevel::LOG_WARNING => Ok(Self::Warning),
-            TraceLogLevel::LOG_ERROR   => Ok(Self::Error),
-            TraceLogLevel::LOG_FATAL   => Ok(Self::Fatal),
+            TraceLogLevel::LOG_ERROR => Ok(Self::Error),
+            TraceLogLevel::LOG_FATAL => Ok(Self::Fatal),
 
-            | TraceLogLevel::LOG_ALL
-            | TraceLogLevel::LOG_NONE
-                => Err(InvalidLogLevelError(value)),
+            TraceLogLevel::LOG_ALL | TraceLogLevel::LOG_NONE => Err(InvalidLogLevelError(value)),
         }
     }
 }
 
+#[derive(Debug)]
 pub struct ConsoleOut {
     log: VecDeque<String>,
     dbg: Vec<String>,
@@ -97,14 +92,17 @@ impl ConsoleOut {
         if self.log.len() == 512 {
             _ = self.log.pop_front();
         }
-        self.log.push_back(format!("<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>"));
+        self.log
+            .push_back(format!("<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>"));
         self.is_dirty = true;
     }
 
     pub fn dbg(&mut self, cat: ConsoleLineCategory, depth: usize, msg: std::fmt::Arguments<'_>) {
         self.dbg.truncate(depth);
 
-        assert_eq!(self.dbg.len(), depth,
+        assert_eq!(
+            self.dbg.len(),
+            depth,
             "cannot push more than one depth (current depth: {}, write depth: {})\nconsole: {:?}\nwanted to print: \"{:?}\"",
             self.dbg.len() as isize - 1,
             depth,
@@ -113,17 +111,22 @@ impl ConsoleOut {
         );
 
         let (Color { r, g, b, a }, pre) = cat.color_prefix();
-        self.dbg.push(format!("<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>"));
+        self.dbg
+            .push(format!("<color=rgba({r},{g},{b},{a})>{pre}{msg}</color>"));
         self.is_dirty = true;
     }
 
     #[inline]
-    pub fn log_history(&self) -> impl DoubleEndedIterator<Item = &'_ str> + ExactSizeIterator + Clone {
+    pub fn log_history(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &'_ str> + ExactSizeIterator + Clone {
         self.log.iter().map(String::as_str)
     }
 
     #[inline]
-    pub fn dbg_history(&self) -> impl DoubleEndedIterator<Item = &'_ str> + ExactSizeIterator + Clone {
+    pub fn dbg_history(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &'_ str> + ExactSizeIterator + Clone {
         self.dbg.iter().map(String::as_str)
     }
 }

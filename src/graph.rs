@@ -31,15 +31,27 @@ impl WeightedGraph {
     pub fn new(verts: Vec<Vertex>, edges: Vec<Edge>) -> Self {
         Self {
             adjacent: (0..verts.len() as VertexID)
-                .map(|v| edges.iter()
-                    .filter_map(|e|
-                        if e.adj[0] == v {
-                            Some(Adjacent { vertex: e.adj[1], weight: e.weight })
-                        } else if e.adj[1] == v {
-                            Some(Adjacent { vertex: e.adj[0], weight: e.weight })
-                        } else { None }
-                    ).collect()
-                ).collect(),
+                .map(|v| {
+                    edges
+                        .iter()
+                        .filter_map(|e| {
+                            if e.adj[0] == v {
+                                Some(Adjacent {
+                                    vertex: e.adj[1],
+                                    weight: e.weight,
+                                })
+                            } else if e.adj[1] == v {
+                                Some(Adjacent {
+                                    vertex: e.adj[0],
+                                    weight: e.weight,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .collect(),
             verts,
             edges,
         }
@@ -65,20 +77,37 @@ impl WeightedGraph {
         &self.adjacent[vertex as usize]
     }
 
-    pub fn verts_iter(&self) -> impl ExactSizeIterator<Item = (VertexID, &Vertex)> + DoubleEndedIterator {
-        self.verts.iter()
-            .enumerate()
-            .map(|(v, vert)| (VertexID::try_from(v).unwrap_or_else(|_| panic!("greater than {} vertices is not supported", VertexID::MAX)), vert))
+    pub fn verts_iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (VertexID, &Vertex)> + DoubleEndedIterator {
+        self.verts.iter().enumerate().map(|(v, vert)| {
+            (
+                VertexID::try_from(v).unwrap_or_else(|_| {
+                    panic!("greater than {} vertices is not supported", VertexID::MAX)
+                }),
+                vert,
+            )
+        })
     }
 
     pub fn find_vert(&self, id_or_alias: &str) -> Option<VertexID> {
-        self.verts.iter()
-            .position(|vert| vert.id.eq_ignore_ascii_case(id_or_alias) || vert.alias.eq_ignore_ascii_case(id_or_alias))
-            .map(|v| VertexID::try_from(v).unwrap_or_else(|_| panic!("greater than {} vertices is not supported", VertexID::MAX)))
+        self.verts
+            .iter()
+            .position(|vert| {
+                vert.id.eq_ignore_ascii_case(id_or_alias)
+                    || vert.alias.eq_ignore_ascii_case(id_or_alias)
+            })
+            .map(|v| {
+                VertexID::try_from(v).unwrap_or_else(|_| {
+                    panic!("greater than {} vertices is not supported", VertexID::MAX)
+                })
+            })
     }
 
     pub fn add_edge(&mut self, a: VertexID, b: VertexID) {
-        let weight = self.verts[a as usize].pos.distance(self.verts[b as usize].pos);
+        let weight = self.verts[a as usize]
+            .pos
+            .distance_to(self.verts[b as usize].pos);
         self.edges.push(Edge {
             adj: [a, b],
             weight,
@@ -88,7 +117,11 @@ impl WeightedGraph {
     }
 
     pub fn add_vertex(&mut self, id: impl ToString, alias: impl ToString, pos: Vector3) {
-        self.verts.push(Vertex { id: id.to_string(), alias: alias.to_string(), pos });
+        self.verts.push(Vertex {
+            id: id.to_string(),
+            alias: alias.to_string(),
+            pos,
+        });
         self.adjacent.push(Vec::new());
     }
 }

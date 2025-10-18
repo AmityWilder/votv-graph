@@ -1,13 +1,24 @@
-use std::{ops::ControlFlow, str::FromStr, task::Poll};
 use raylib::prelude::*;
+use std::{ops::ControlFlow, str::FromStr, task::Poll};
+use thiserror::Error;
 // use snippet::Snippet;
-use crate::{camera::Orbiter, console::{input::ConsoleIn, output::ConsoleOut}, console_log, graph::{VertexID, WeightedGraph}, route::RouteGenerator, serialization::LoadGraphError, types::{Coords, ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo}, CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS};
+use crate::{
+    CAMERA_LENGTH_DEFAULT, VERTEX_RADIUS,
+    camera::Orbiter,
+    console::{input::ConsoleIn, output::ConsoleOut},
+    console_log,
+    graph::{VertexID, WeightedGraph},
+    route::RouteGenerator,
+    serialization::LoadGraphError,
+    types::{Coords, ParseColorError, ParseCoordsError, ParseTempoError, RichColor, Tempo},
+};
 
 pub mod snippet;
 // pub mod exec;
 // mod cmd;
 
 /// All information that can be affected by commands
+#[derive(Debug)]
 pub struct ProgramData {
     pub graph: WeightedGraph,
     pub route: Option<RouteGenerator>,
@@ -22,6 +33,7 @@ pub struct ProgramData {
     pub background_color: Color,
 }
 
+#[derive(Debug)]
 pub struct CmdReturn {
     rets: Vec<String>,
     disp: Option<CmdRetDisplay>,
@@ -35,7 +47,10 @@ impl Default for CmdReturn {
 
 impl CmdReturn {
     const fn void() -> Self {
-        Self { rets: Vec::new(), disp: None }
+        Self {
+            rets: Vec::new(),
+            disp: None,
+        }
     }
 
     const fn pure(rets: Vec<String>) -> Self {
@@ -43,11 +58,17 @@ impl CmdReturn {
     }
 
     fn disp(disp: CmdRetDisplay) -> Self {
-        Self { rets: Vec::new(), disp: Some(disp) }
+        Self {
+            rets: Vec::new(),
+            disp: Some(disp),
+        }
     }
 
     fn new(rets: Vec<String>, disp: CmdRetDisplay) -> Self {
-        Self { rets, disp: Some(disp) }
+        Self {
+            rets,
+            disp: Some(disp),
+        }
     }
 
     pub fn print(self, cout: &mut ConsoleOut, data: &ProgramData) {
@@ -169,6 +190,7 @@ macro_rules! define_commands {
             }
         }
 
+        #[derive(Debug)]
         pub enum CmdRetDisplay {
             $($($($RetDisp$($RetDispFields)?,)*)+)+
         }
@@ -188,7 +210,7 @@ macro_rules! define_commands {
     };
 }
 
-define_commands!{
+define_commands! {
     #[input = "help"]
     #[help = "Display information about commands."]
     Help {
@@ -296,7 +318,7 @@ define_commands!{
         Vertex = |_cout, _cin, data, args| {
             if let [target_arg] = args && &**target_arg != "reset" {
                 let vert = data.graph.verts().iter()
-                    .find(|vert| (vert.id.eq_ignore_ascii_case(target_arg) || vert.alias.eq_ignore_ascii_case(target_arg)))
+                    .find(|vert| vert.id.eq_ignore_ascii_case(target_arg) || vert.alias.eq_ignore_ascii_case(target_arg))
                     .ok_or_else(|| CmdError::VertexDNE(target_arg.to_string()))?;
 
                 data.orbit.target = vert.pos;
@@ -312,7 +334,7 @@ define_commands!{
         #[rets()]
         Reset = |_cout, _cin, data, args| {
             if matches!(args, ["reset"]) {
-                data.orbit.target = Vector3::ZERO;
+                data.orbit.target = Vector3::zero();
                 data.orbit.length = CAMERA_LENGTH_DEFAULT;
                 Ok(CmdPromise::Ready(CmdReturn::void()))
             } else {
@@ -742,11 +764,13 @@ impl ParseVert for str {
     type Err = CmdError;
 
     fn parse_vert(&self, graph: &WeightedGraph) -> Result<VertexID, Self::Err> {
-        graph.find_vert(self)
+        graph
+            .find_vert(self)
             .ok_or_else(|| CmdError::VertexDNE(self.to_string()))
     }
 }
 
+#[derive(Debug)]
 pub enum CmdPromise {
     Ready(CmdReturn),
     InteractiveTargets,
@@ -754,20 +778,24 @@ pub enum CmdPromise {
 }
 
 impl CmdPromise {
-    pub fn poll(&mut self, cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData) -> Poll<Result<CmdReturn, CmdError>> {
+    pub fn poll(
+        &mut self,
+        cout: &mut ConsoleOut,
+        cin: &mut ConsoleIn,
+        data: &mut ProgramData,
+    ) -> Poll<Result<CmdReturn, CmdError>> {
         match self {
             Self::Ready(x) => Poll::Ready(Ok(std::mem::take(x))),
             Self::InteractiveTargets => {
                 if data.is_giving_interactive_targets {
                     Poll::Pending
                 } else {
-                    let args = std::mem::take(&mut data.interactive_targets).into_iter()
+                    let args = std::mem::take(&mut data.interactive_targets)
+                        .into_iter()
                         .map(|target| data.graph.vert(target).id.clone())
                         .collect::<Vec<String>>();
 
-                    let args = args.iter()
-                        .map(String::as_str)
-                        .collect::<Vec<&str>>();
+                    let args = args.iter().map(String::as_str).collect::<Vec<&str>>();
 
                     match (cmd::SvRoute::Immediate.runner())(cout, cin, data, &args) {
                         Ok(x) => {
@@ -781,7 +809,9 @@ impl CmdPromise {
             Self::Route => {
                 if let Some(route) = data.route.as_ref() {
                     if route.is_finished() {
-                        let results = route.result().iter()
+                        let results = route
+                            .result()
+                            .iter()
                             .map(|&v| data.graph.vert(v).id.clone())
                             .collect::<Vec<String>>();
 
@@ -797,6 +827,7 @@ impl CmdPromise {
     }
 }
 
+#[derive(Debug)]
 pub struct Routine {
     prev_ret: CmdPromise,
     src: Vec<String>,
@@ -806,26 +837,27 @@ impl Routine {
     pub fn new(src: &str) -> Self {
         Self {
             prev_ret: CmdPromise::Ready(CmdReturn::void()),
-            src: src
-                .split('|')
-                .map(|s| s.trim().to_string())
-                .rev()
-                .collect(),
+            src: src.split('|').map(|s| s.trim().to_string()).rev().collect(),
         }
     }
 
-    pub fn step(&mut self, cout: &mut ConsoleOut, cin: &mut ConsoleIn, data: &mut ProgramData) -> ControlFlow<Result<CmdReturn, CmdError>> {
+    pub fn step(
+        &mut self,
+        cout: &mut ConsoleOut,
+        cin: &mut ConsoleIn,
+        data: &mut ProgramData,
+    ) -> ControlFlow<Result<CmdReturn, CmdError>> {
         match self.prev_ret.poll(cout, cin, data) {
             Poll::Ready(Ok(prev_ret)) => {
                 if let Some(line) = self.src.pop() {
                     let item = &line
                         .split_whitespace()
                         .chain(prev_ret.rets.iter().map(String::as_str))
-                        .collect::<Vec<&str>>()
-                        [..];
+                        .collect::<Vec<&str>>()[..];
 
                     if let [cmd, args @ ..] = item {
-                        let result = cmd.parse::<Cmd>()
+                        let result = cmd
+                            .parse::<Cmd>()
                             .and_then(|cmd| cmd.run(cout, cin, data, args));
 
                         match result {
@@ -849,10 +881,12 @@ impl Routine {
 }
 
 fn help_all_msg() -> String {
-    let cmd_column_width = Cmd::LIST.into_iter()
+    let cmd_column_width = Cmd::LIST
+        .into_iter()
         .map(|cmd| cmd.input().len())
         .max()
-        .unwrap() + 2;
+        .unwrap()
+        + 2;
 
     let mut msg = String::with_capacity(2048);
     msg.push_str("<color = #48f19d>Commands:</color>");
@@ -871,10 +905,20 @@ fn help_all_msg() -> String {
 
 impl Cmd {
     fn help_msg(self) -> String {
-        let template_column_width = self.usage_list().iter()
-            .map(|usage| self.input().len() + if !usage.template().is_empty() { usage.template().len() + 1 } else { 0 })
+        let template_column_width = self
+            .usage_list()
+            .iter()
+            .map(|usage| {
+                self.input().len()
+                    + if !usage.template().is_empty() {
+                        usage.template().len() + 1
+                    } else {
+                        0
+                    }
+            })
             .max()
-            .unwrap() + 2;
+            .unwrap()
+            + 2;
 
         let mut msg = String::with_capacity(2048);
         msg.push_str("<color = #48f19d>Usage:</color>");
@@ -954,7 +998,7 @@ macro_rules! reserved_names {
     };
 }
 
-reserved_names!{
+reserved_names! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum ReservedName {
         #[reason = "used by `sv.route` for generating routes interactively"]
@@ -966,77 +1010,53 @@ reserved_names!{
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CmdError {
-    /// Not yet implemented
+    #[error("not yet implemented")]
     Todo,
+
+    #[error("{}", .0.help_msg())]
     CheckUsage(Cmd),
+
+    #[error("vertex \"{0}\" does not exist")]
     VertexDNE(String),
+
+    #[error("the name \"{0}\" is already in use by an existing vertex")]
     DuplicateVertexName(String),
+
+    #[error("vertices cannot be named \"{}\". reason: {}", .0, .0.reason())]
     BadVertexName(ReservedName),
+
+    #[error("no route currently exists")]
     NoExistingRoute,
+
+    #[error("vertices cannot have duplicate edges or edges to themselves")]
     EdgeLoop,
-    ParseCoords(ParseCoordsError),
-    ParseColor(ParseColorError),
-    ParseBool(std::str::ParseBoolError),
-    ParseInt(std::num::ParseIntError),
-    ParseFloat(std::num::ParseFloatError),
-    ParseTempo(ParseTempoError),
-    LoadGraph(LoadGraphError),
+
+    #[error("could not parse coordinates")]
+    ParseCoords(#[from] ParseCoordsError),
+
+    #[error("could not parse color")]
+    ParseColor(#[from] ParseColorError),
+
+    #[error("could not parse boolean")]
+    ParseBool(#[from] std::str::ParseBoolError),
+
+    #[error("could not parse integer")]
+    ParseInt(#[from] std::num::ParseIntError),
+
+    #[error("could not parse float")]
+    ParseFloat(#[from] std::num::ParseFloatError),
+
+    #[error("could not parse tempo")]
+    ParseTempo(#[from] ParseTempoError),
+
+    #[error("could not load graph")]
+    LoadGraph(#[from] LoadGraphError),
+
+    #[error("no such command `{0}`")]
     NoSuchCmd(String),
-    IOError(std::io::Error),
-}
 
-impl std::fmt::Display for CmdError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::Todo => f.write_str("not yet implemented"),
-            Self::CheckUsage(cmd) => f.write_str(cmd.help_msg().as_str()),
-            Self::VertexDNE(id) => write!(f, "vertex \"{id}\" does not exist"),
-            Self::BadVertexName(name) => write!(f, "vertices cannot be named \"{name}\". reason: {}", name.reason()),
-            Self::DuplicateVertexName(name) => write!(f, "the name \"{name}\" is already in use by an existing vertex"),
-            Self::NoExistingRoute => f.write_str("no route currently exists"),
-            Self::EdgeLoop => f.write_str("vertices cannot have duplicate edges or edges to themselves"),
-            Self::ParseCoords(_) => f.write_str("could not parse coordinates"),
-            Self::ParseColor(_) => f.write_str("could not parse color"),
-            Self::ParseBool(_) => f.write_str("could not parse boolean"),
-            Self::ParseInt(_) => f.write_str("could not parse integer"),
-            Self::ParseFloat(_) => f.write_str("could not parse float"),
-            Self::ParseTempo(_) => f.write_str("could not parse tempo"),
-            Self::LoadGraph(_) => f.write_str("could not load graph"),
-            Self::NoSuchCmd(cmd) => write!(f, "no such command `{cmd}`"),
-            Self::IOError(_) => f.write_str("filesystem IO error"),
-        }
-    }
-}
-
-impl std::error::Error for CmdError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            | Self::Todo
-            | Self::CheckUsage(_)
-            | Self::VertexDNE(_)
-            | Self::BadVertexName(_)
-            | Self::DuplicateVertexName(_)
-            | Self::NoExistingRoute
-            | Self::EdgeLoop
-            | Self::NoSuchCmd(_)
-                => None,
-
-            Self::ParseCoords(e) => Some(e),
-            Self::ParseColor(e) => Some(e),
-            Self::ParseBool(e) => Some(e),
-            Self::ParseInt(e) => Some(e),
-            Self::ParseFloat(e) => Some(e),
-            Self::ParseTempo(e) => Some(e),
-            Self::LoadGraph(e) => Some(e),
-            Self::IOError(e) => Some(e),
-        }
-    }
-}
-
-impl From<std::io::Error> for CmdError {
-    fn from(value: std::io::Error) -> Self {
-        CmdError::IOError(value)
-    }
+    #[error(transparent)]
+    IOError(#[from] std::io::Error),
 }

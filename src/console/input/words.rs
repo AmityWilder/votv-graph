@@ -8,17 +8,13 @@ impl WordsEx for str {
     }
 }
 
-const BRACKET_PAIRS: [(char, char); 4] = [
-    ('[', ']'),
-    ('(', ')'),
-    ('{', '}'),
-    ('<', '>'),
-];
+const BRACKET_PAIRS: [(char, char); 4] = [('[', ']'), ('(', ')'), ('{', '}'), ('<', '>')];
 
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
+#[derive(Debug)]
 pub struct Words<'a> {
     src: &'a str,
 }
@@ -27,14 +23,17 @@ impl<'a> Iterator for Words<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.src.is_empty() { return None; }
+        if self.src.is_empty() {
+            return None;
+        }
         let st = self.src.trim_start();
         let mid = if let Some(next_char) = st.chars().next() {
             let trimmed_len = if is_word_char(next_char) {
                 st.trim_start_matches(is_word_char).len()
             } else {
                 let trimmed = st.trim_start_matches(next_char);
-                BRACKET_PAIRS.iter()
+                BRACKET_PAIRS
+                    .iter()
                     .copied()
                     .find(|&(a, _)| a == next_char)
                     .and_then(|(_, b)| trimmed.strip_prefix(b))
@@ -53,14 +52,17 @@ impl<'a> Iterator for Words<'a> {
 
 impl<'a> DoubleEndedIterator for Words<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.src.is_empty() { return None; }
+        if self.src.is_empty() {
+            return None;
+        }
         let st = self.src.trim_end();
         let mid = if let Some(last_char) = st.chars().next_back() {
             if is_word_char(last_char) {
                 st.trim_end_matches(is_word_char).len()
             } else {
                 let trimmed = st.trim_end_matches(last_char);
-                BRACKET_PAIRS.iter()
+                BRACKET_PAIRS
+                    .iter()
                     .copied()
                     .find(|&(_, b)| b == last_char)
                     .and_then(|(a, _)| trimmed.strip_suffix(a))

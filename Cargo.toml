@@ -4,4 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-raylib = { git = "https://github.com/raylib-rs/raylib-rs.git", branch = "unstable" }
+clap = "4.5.49"
+miette = "7.6.0"
+nom = "8.0.0"
+quote = "1.0.41"
+raylib = "5.5.1"
+serde = "1.0.228"
+smallvec = "1.15.1"
+thiserror = "2.0.17"
